@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maxsat-runner"
+version = "0.1.0"
+description = "Orchestration MaxSAT: CLI + API, capture temps réel des coûts (o <cost>) et export CSV."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name="Votre Nom"}]
+dependencies = [
+  "typer>=0.12",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "pytest-cov>=5.0"]
+
+[project.scripts]
+maxsat-runner = "maxsat_runner.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"maxsat_runner.webui" = ["*.html", "*.js", "*.css"]
+
+
+[tool.pytest.ini_options]
+addopts = "-q"
+python_files = ["test_*.py"]

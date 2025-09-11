@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional, List
 
 @dataclass
@@ -11,6 +10,7 @@ class Event:
 class RunResult:
     solver_tag: str
     solver_cmd: str
+    solver_alias: str
     instance: str
     events: List[Event]
     final_cost: Optional[int]

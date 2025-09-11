@@ -14,6 +14,7 @@ def append_csv(out_dir: Path, results: List[RunResult]) -> Tuple[Path, Path]:
         for i, e in enumerate(r.events):
             traj_rows.append({
                 "solver_tag": r.solver_tag,
+                "solver_alias": r.solver_alias,  # NEW
                 "solver_cmd": r.solver_cmd,
                 "instance": r.instance,
                 "event_idx": i,
@@ -22,6 +23,7 @@ def append_csv(out_dir: Path, results: List[RunResult]) -> Tuple[Path, Path]:
             })
         sum_rows.append({
             "solver_tag": r.solver_tag,
+            "solver_alias": r.solver_alias,     # NEW
             "solver_cmd": r.solver_cmd,
             "instance": r.instance,
             "final_cost": r.final_cost,
@@ -32,24 +34,19 @@ def append_csv(out_dir: Path, results: List[RunResult]) -> Tuple[Path, Path]:
 
     if traj_rows:
         df_traj = pd.DataFrame(traj_rows,
-                               columns=["solver_tag","solver_cmd","instance","event_idx","elapsed_sec","cost"])
+            columns=["solver_tag","solver_alias","solver_cmd","instance","event_idx","elapsed_sec","cost"])
         df_traj.to_csv(traj_csv, mode="a", header=not traj_csv.exists(), index=False)
 
     if sum_rows:
         df_sum = pd.DataFrame(sum_rows,
-                              columns=["solver_tag","solver_cmd","instance","final_cost","time_to_best_sec","optimum_found","exit_code"])
+            columns=["solver_tag","solver_alias","solver_cmd","instance","final_cost","time_to_best_sec","optimum_found","exit_code"])
         df_sum.to_csv(sum_csv, mode="a", header=not sum_csv.exists(), index=False)
 
     return traj_csv, sum_csv
 
 def write_instance_csv(out_dir: Path, tag: str, r: RunResult) -> Path:
-    """
-    Écrit/écrase le CSV par instance : data/runs/<tag>/<basename>.csv
-    Colonnes: solver_tag, solver_cmd, instance, event_idx, elapsed_sec, cost
-    """
     tag_dir = out_dir / tag
     tag_dir.mkdir(parents=True, exist_ok=True)
-    # basename de l'instance (sans dossiers); extension -> .csv
     import os
     base = os.path.basename(r.instance)
     if base.lower().endswith(".wcnf"):
@@ -58,6 +55,7 @@ def write_instance_csv(out_dir: Path, tag: str, r: RunResult) -> Path:
 
     rows = [{
         "solver_tag": r.solver_tag,
+        "solver_alias": r.solver_alias,
         "solver_cmd": r.solver_cmd,
         "instance": r.instance,
         "event_idx": i,
@@ -65,6 +63,6 @@ def write_instance_csv(out_dir: Path, tag: str, r: RunResult) -> Path:
         "cost": e.cost,
     } for i, e in enumerate(r.events)]
 
-    df = pd.DataFrame(rows, columns=["solver_tag","solver_cmd","instance","event_idx","elapsed_sec","cost"])
+    df = pd.DataFrame(rows, columns=["solver_tag","solver_alias","solver_cmd","instance","event_idx","elapsed_sec","cost"])
     df.to_csv(inst_csv, index=False)
     return inst_csv

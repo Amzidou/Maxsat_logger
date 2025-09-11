@@ -60,8 +60,8 @@ Vous pouvez déposer les fichiers manuellement ou utiliser les endpoints `/fs/*`
 
 ```bash
 maxsat-runner run \
-  --solver "/chemin/solverA {inst}" \
-  --solver "/chemin/solverB --old-format {inst}" \
+  --solver "solverA=/chemin/solverA {inst}" \
+  --solver "solverB=/chemin/solverB --old-format {inst}" \
   --instances data/instances/demo \
   --pattern .wcnf \
   --out data/runs \

@@ -1,59 +1,138 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>MaxSAT Runner UI</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!-- Bootstrap 5 CDN -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
 </head>
 <body class="bg-light">
+  <div class="container py-4">
+    <h1 class="mb-4">MaxSAT Runner UI</h1>
 
-<div class="container py-4">
-  <h1 class="mb-4">MaxSAT Runner UI</h1>
+    <!-- ================== RUN ================== -->
+    <form id="runForm" class="card p-3 mb-4">
+      <h4>Campagne</h4>
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label for="instances_dir" class="form-label">Instances dir</label>
+          <input type="text" class="form-control" id="instances_dir" value="instances/demo" />
+        </div>
+        <div class="col-md-3">
+          <label for="pattern" class="form-label">Pattern</label>
+          <input type="text" class="form-control" id="pattern" value=".wcnf" />
+        </div>
+        <div class="col-md-3">
+          <label for="timeout_sec" class="form-label">Timeout (sec)</label>
+          <input type="number" class="form-control" id="timeout_sec" placeholder="optionnel" />
+        </div>
+        <div class="col-md-6">
+          <label for="out_dir" class="form-label">Out dir</label>
+          <input type="text" class="form-control" id="out_dir" value="runs" />
+        </div>
+        <div class="col-md-6">
+          <label for="tag" class="form-label">Tag</label>
+          <input type="text" class="form-control" id="tag" value="web_run" />
+        </div>
+      </div>
 
-  <!-- Form -->
-  <form id="runForm" class="card p-3">
-    <div class="mb-3">
-      <label for="instances_dir" class="form-label">Instances dir</label>
-      <input type="text" class="form-control" id="instances_dir" value="instances/demo">
+      <hr />
+      <h5>Liste des solveurs</h5>
+      <div id="solversList"></div>
+      <button type="button" class="btn btn-sm btn-primary mt-2" onclick="addSolver()">+ Ajouter un solver</button>
+      <small class="text-muted d-block mt-1">Chaque commande doit contenir <code>{inst}</code>. Alias requis.</small>
+
+      <div class="mt-3">
+        <button type="button" class="btn btn-success" onclick="submitJob()">Lancer</button>
+      </div>
+    </form>
+
+    <!-- ================== STATS ================== -->
+    <form id="statsForm" class="card p-3">
+      <h4>Statistiques</h4>
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label for="runs_dir" class="form-label">Runs dir</label>
+          <input type="text" class="form-control" id="runs_dir" value="runs" />
+          <div class="form-text">Relatif à <code>data/</code></div>
+        </div>
+        <div class="col-md-6">
+          <label for="reports_dir" class="form-label">Reports dir</label>
+          <input type="text" class="form-control" id="reports_dir" value="reports" />
+          <div class="form-text">Relatif à <code>data/</code></div>
+        </div>
+        <div class="col-md-6">
+          <label for="by_key" class="form-label">Agrégation par</label>
+          <select class="form-select" id="by_key">
+            <option value="solver_alias" selected>solver_alias</option>
+            <option value="solver_cmd">solver_cmd</option>
+            <option value="solver_tag">solver_tag</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label for="instance_name" class="form-label">Instance (optionnel)</label>
+          <input type="text" class="form-control" id="instance_name" placeholder="ex: tiny2 (sans .wcnf)" />
+        </div>
+
+        <!-- Filtres temporels -->
+        <div class="col-md-4">
+          <label for="t_min" class="form-label">t_min (sec, optionnel)</label>
+          <input type="number" step="any" class="form-control" id="t_min" placeholder="ex: 0.0" />
+        </div>
+        <div class="col-md-4">
+          <label for="t_max" class="form-label">t_max (sec, optionnel)</label>
+          <input type="number" step="any" class="form-control" id="t_max" placeholder="ex: 2.0" />
+        </div>
+        <div class="col-md-4">
+          <label for="t_at" class="form-label">t_at (snapshot, sec)</label>
+          <input type="number" step="any" class="form-control" id="t_at" placeholder="ex: 1.0" />
+          <div class="form-text">Compte les gagnants à t_at (leaderboard relatif).</div>
+        </div>
+      </div>
+      <div class="mt-3">
+        <button type="button" class="btn btn-secondary" onclick="submitStats()">Générer les statistiques</button>
+      </div>
+    </form>
+
+    <!-- Résultat JSON brut -->
+    <div class="mt-4">
+      <h3>Résultat</h3>
+      <pre id="out" class="bg-white p-3 border"></pre>
     </div>
 
-    <div class="mb-3">
-      <label for="pattern" class="form-label">Pattern</label>
-      <input type="text" class="form-control" id="pattern" value=".wcnf">
+    <div id="finalGallery" class="mt-3"></div>
+
+    <!-- Aperçu des images globales -->
+    <div id="previews" class="mt-3"></div>
+
+    <!-- Tableau Leaderboard (classique) -->
+    <div id="leaderboardWrap" class="mt-3" style="display:none;">
+      <div class="card">
+        <div class="card-header">Leaderboard (final_cost)</div>
+        <div class="card-body table-responsive">
+          <table class="table table-sm table-striped align-middle" id="leaderboardTable"></table>
+        </div>
+      </div>
     </div>
 
-    <div class="mb-3">
-      <label for="out_dir" class="form-label">Out dir</label>
-      <input type="text" class="form-control" id="out_dir" value="runs">
+    <!-- Tableau Leaderboard relatif -->
+    <div id="leaderboardRelWrap" class="mt-3" style="display:none;">
+      <div class="card">
+        <div class="card-header">Leaderboard relatif (fenêtre temporelle)</div>
+        <div class="card-body table-responsive">
+          <table class="table table-sm table-striped align-middle" id="leaderboardRelTable"></table>
+        </div>
+      </div>
     </div>
 
-    <div class="mb-3">
-      <label for="tag" class="form-label">Tag</label>
-      <input type="text" class="form-control" id="tag" value="web_run">
-    </div>
+    <!-- Galerie par instance (coût vs temps) -->
+    <div id="instGallery" class="mt-3"></div>
 
-    <div class="mb-3">
-      <label for="timeout_sec" class="form-label">Timeout (sec)</label>
-      <input type="number" class="form-control" id="timeout_sec" placeholder="optionnel">
-    </div>
+    <!-- Galerie des scores par instance -->
+    <div id="instScoreGallery" class="mt-3"></div>
 
-    <h5>Liste des solveurs</h5>
-    <div id="solversList"></div>
-    <button type="button" class="btn btn-sm btn-primary mt-2" onclick="addSolver()">+ Ajouter un solver</button>
-
-    <hr>
-    <button type="button" class="btn btn-success" onclick="submitJob()">Lancer</button>
-  </form>
-
-  <!-- Résultat -->
-  <div class="mt-4">
-    <h3>Résultat</h3>
-    <pre id="out" class="bg-white p-3 border"></pre>
   </div>
-</div>
-
-<script src="app.js"></script>
+  <script src="app.js?v=100101"></script>
 </body>
 </html>

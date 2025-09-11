@@ -84,7 +84,7 @@ def plot_time_to_best_box(df_sum: pd.DataFrame, out_png: Path, by: str = "solver
     plt.figure(figsize=(8, 4.5), dpi=150)
     data = [grp["time_to_best_sec"].values for _, grp in df.groupby(by)]
     labels = [str(k) for k, _ in df.groupby(by)]
-    plt.boxplot(data, labels=labels, showfliers=False)
+    plt.boxplot(data, tick_labels=labels, showfliers=False)
     plt.xticks(rotation=45, ha="right")
     plt.ylabel("Time to best (sec)")
     plt.title("Temps au meilleur (distribution)")
@@ -184,7 +184,10 @@ def aggregate_relative_leaderboard(
         seg = compute_relative_scores_timewindow_for_instance(df_traj, inst, by=by, t_min=t_min, t_max=t_max)
         if seg.empty:
             continue
-        m = seg.groupby("solver").apply(lambda g: g["score"].fillna(0.0).mean())
+        g2 = seg.copy()
+        g2["score"] = g2["score"].fillna(0.0)
+        m = g2.groupby("solver", observed=True)["score"].mean()
+        
         for k, v in m.items():
             per_solver_scores.setdefault(k, []).append(float(v))
 

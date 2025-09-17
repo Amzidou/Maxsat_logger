@@ -22,8 +22,7 @@ def test_campaign_with_fake_solver(tmp_path: Path):
         solver_cmds=solver_cmds,
         instances_dir=inst_dir,
         pattern=".wcnf",
-        out_dir=out_dir,
-        tag="test",
+        out_dir=out_dir
     ))
 
     # CSV existent

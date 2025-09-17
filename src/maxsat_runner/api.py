@@ -8,9 +8,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .core.campaign import run_campaign_sequential
-from .analytics.stats import generate_basic_reports  # NEW
+from .analytics.stats import generate_basic_reports  # stats driver
 
-api = FastAPI(title="MaxSAT Runner API", version="0.4.0")
+api = FastAPI(title="MaxSAT Runner API", version="0.5.0")
 
 # --- FS root sandbox (toutes les E/S sous ./data) ---
 DATA_ROOT = (Path.cwd() / "data").resolve()
@@ -23,13 +23,14 @@ DATA_ROOT.mkdir(parents=True, exist_ok=True)
 WEBUI_DIR = Path(__file__).with_name("webui")
 api.mount("/ui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="ui")
 
-# EXPOSITION EN LECTURE SEULE DES FICHIERS DE data/
-# -> permet d'afficher les PNG/CSV produits par /stats directement dans le navigateur
+# Exposition READ-ONLY de data/
 api.mount("/data", StaticFiles(directory=str(DATA_ROOT), html=False), name="data")
+
 
 @api.get("/")
 def root():
     return RedirectResponse(url="/ui/")
+
 
 # ---------- File de jobs ----------
 JOBS: Dict[str, Dict] = {}
@@ -85,7 +86,6 @@ async def _worker():
                     instances_dir=Path(p["instances_dir"]),
                     pattern=p["pattern"],
                     out_dir=Path(p["out_dir"]),
-                    tag=p["tag"],
                     timeout_sec=p.get("timeout_sec"),
                 )
                 JOBS[next_id]["result"] = result
@@ -96,14 +96,15 @@ async def _worker():
     finally:
         RUNNING = False
 
+
 # ---------- RUN ----------
 @api.post("/run")
 async def api_run(body: Dict, background: BackgroundTasks):
-    # Compat: accepter solver_pairs OU solver_cmds (legacy)
+    # Compat: accepter solver_pairs OU solver_cmds
     if not ("solver_pairs" in body or "solver_cmds" in body):
         return JSONResponse({"ok": False, "error": "champ manquant: solver_pairs ou solver_cmds"}, status_code=400)
 
-    required = ["instances_dir","pattern","out_dir","tag"]
+    required = ["instances_dir", "pattern", "out_dir"]
     for k in required:
         if k not in body:
             return JSONResponse({"ok": False, "error": f"champ manquant: {k}"}, status_code=400)
@@ -134,6 +135,7 @@ def api_status(job_id: str):
         return JSONResponse({"ok": False, "error": "job introuvable"}, status_code=404)
     info = JOBS[job_id]
     return {"ok": True, "job_id": job_id, "status": info["status"], "result": info["result"]}
+
 
 # ---------- STATS ----------
 @api.post("/stats")
@@ -171,6 +173,7 @@ def api_stats(body: Dict):
         "leaderboard_relative_csv_url": u(res["leaderboard_relative_csv"]),
         "avg_scores_csv_url": _path_to_data_url(Path(res["avg_scores_csv"])) if res.get("avg_scores_csv") else None,
         "avg_scores_png_url": _path_to_data_url(Path(res["avg_scores_png"])) if res.get("avg_scores_png") else None,
+        "replicas_by_solver_csv_url": u(res.get("replicas_by_solver_csv")),
     }
 
     inst_cost_urls = []
@@ -180,12 +183,18 @@ def api_stats(body: Dict):
     inst_score_urls = []
     for it in res.get("instance_score_plots", []):
         inst_score_urls.append({"instance": it["instance"], "url": u(it["png"])})
+        
+    rep_solver_urls = []
+    for it in res.get("replicas_by_solver_plots", []):
+        rep_solver_urls.append({"solver": it["solver"], "url": u(it["png"])})
 
     return {"ok": True, **res, **urls,
             "instance_plots": inst_cost_urls,
-            "instance_score_plots": inst_score_urls}
+            "instance_score_plots": inst_score_urls,
+            "replicas_by_solver_plots": rep_solver_urls}
 
-# ---------- FS utilitaires (optionnels) ----------
+
+# ---------- FS utilitaires ----------
 @api.post("/fs/mkdir")
 def api_mkdir(path: str):
     try:

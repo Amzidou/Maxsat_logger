@@ -6,7 +6,7 @@ import uvicorn
 import asyncio
 
 from .core.campaign import run_campaign_sequential
-from .analytics.stats import generate_basic_reports 
+from .analytics.stats import generate_basic_reports
 
 app = typer.Typer(help="Orchestration MaxSAT: CLI & serveur API + UI")
 
@@ -23,9 +23,8 @@ def cli_run(
     solver: List[str] = typer.Option(..., "--solver", help="Commande (répétable), optionnellement alias=CMD, doit contenir {inst}"),
     instances: str = typer.Option(..., "--instances", help="Dossier d'instances"),
     pattern: str = typer.Option(".wcnf", "--pattern", help="Extension à filtrer (ex: .wcnf)"),
-    out: str = typer.Option("./runs", "--out", help="Dossier de sortie CSV"),
-    tag: str = typer.Option("run", "--tag", help="Étiquette de la campagne"),
-    timeout_sec: Optional[int] = typer.Option(None, "--timeout-sec", help="Timeout par instance (secondes)"),
+    out: str = typer.Option("./runs", "--out", help="Dossier de sortie (contiendra logs/ + CSV agrégés)"),
+    timeout_sec: Optional[int] = typer.Option(None, "--timeout-sec", help="Timeout par run (secondes)"),
 ):
     pairs = []
     for s in solver:
@@ -37,14 +36,14 @@ def cli_run(
             run_campaign_sequential(
                 solver_pairs=pairs, solver_cmds=None,
                 instances_dir=Path(instances), pattern=pattern,
-                out_dir=Path(out), tag=tag, timeout_sec=timeout_sec
+                out_dir=Path(out), timeout_sec=timeout_sec
             )
         )
         typer.echo(json.dumps({
             "ok": True,
             "trajectories_csv": payload["trajectories_csv"],
             "summary_csv": payload["summary_csv"],
-            "results_count": len(payload["results"])
+            "results_count": payload.get("results_count", len(payload.get("results", [])))
         }, ensure_ascii=False, indent=2))
     except Exception as ex:
         typer.echo(json.dumps({"ok": False, "error": str(ex)}, ensure_ascii=False, indent=2))
@@ -54,15 +53,27 @@ def cli_run(
 def cli_stats(
     runs: str = typer.Option("data/runs", "--runs", help="Dossier contenant trajectories.csv/summary.csv"),
     out: str  = typer.Option("data/reports", "--out", help="Dossier de sortie pour rapports/PNGs"),
-    by: str   = typer.Option("solver_cmd", "--by", help="Clé d'agrégation (solver_cmd|solver_tag)"),
-    instance: Optional[str] = typer.Option(None, "--instance", help="Basename d'une instance pour tracer la trajectoire")
+    by: str   = typer.Option("solver_alias", "--by", help="Clé d'agrégation (solver_alias|solver_cmd|solver_tag)"),
+    instance: Optional[str] = typer.Option(None, "--instance", help="Basename d'une instance pour tracer la trajectoire"),
+    t_min: Optional[float] = typer.Option(None, "--t-min", help="Borne inférieure de temps (sec)"),
+    t_max: Optional[float] = typer.Option(None, "--t-max", help="Borne supérieure de temps (sec)"),
+    t_at: Optional[float]  = typer.Option(None, "--t-at",  help="Snapshot à t_at (leaderboard relatif)")
 ):
     try:
-        res = generate_basic_reports(Path(runs), Path(out), by=by, instance_basename=instance)
+        res = generate_basic_reports(
+            Path(runs),
+            Path(out),
+            by=by,
+            instance_basename=instance,
+            t_min=t_min,
+            t_max=t_max,
+            t_at=t_at,
+        )
         typer.echo(json.dumps({"ok": True, **res}, ensure_ascii=False, indent=2))
     except Exception as ex:
         typer.echo(json.dumps({"ok": False, "error": str(ex)}, ensure_ascii=False, indent=2))
         raise typer.Exit(code=1)
+
 
 @app.command("serve")
 def cli_serve(

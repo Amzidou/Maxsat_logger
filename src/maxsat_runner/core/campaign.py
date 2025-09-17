@@ -1,21 +1,19 @@
 from __future__ import annotations
-import asyncio, shlex
+import shlex
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .runner import run_one, list_instances
+from .runner import run_one_streaming as run_one, list_instances
 from .types import RunResult
-from ..io.csvsink import append_csv, write_instance_csv
-
+from ..io.logsink import open_run_log, append_logs_summary
 
 def _derive_alias_from_cmd(cmd: str) -> str:
-    """Dérive un alias court depuis la commande (en retirant un éventuel [cwd=...])."""
     s = cmd.strip()
     if s.startswith("[cwd="):
         r = s.find("]")
         if r != -1:
-            s = s[r + 1 :].lstrip()
+            s = s[r+1:].lstrip()
     try:
         first = shlex.split(s)[0]
     except Exception:
@@ -23,26 +21,20 @@ def _derive_alias_from_cmd(cmd: str) -> str:
         first = toks[0] if toks else "solver"
     return Path(first).name
 
-
 def _normalize_solvers(
-    *,
-    solver_pairs: Optional[List[Dict[str, str]]] = None,
-    solver_cmds: Optional[List[str]] = None,
+    *, solver_pairs: Optional[List[Dict[str, str]]] = None,
+       solver_cmds: Optional[List[str]] = None,
 ) -> List[Tuple[str, str]]:
     """
-    Retourne une liste normalisée de (alias, cmd).
-
-    - Nouveau format (UI/API) : solver_pairs = [{alias: "...", cmd: "..."}, ...]
-      -> 'alias' peut être vide/omise : on le dérive de 'cmd'.
-    - Ancien format (tests/CLI rétro-compat) : solver_cmds = ["alias=CMD {inst}", "CMD {inst}", ...]
-      -> si "alias=..." est absent, on dérive l'alias depuis 'CMD'.
+    Retourne [(alias, cmd)] à partir de:
+      - solver_pairs: [{alias?, cmd}]
+      - solver_cmds:  ["alias=CMD {inst}" | "CMD {inst}"]
     """
     out: List[Tuple[str, str]] = []
-
     if solver_pairs:
         for item in solver_pairs:
             cmd = str(item["cmd"]).strip()
-            alias = str(item.get("alias") or "").strip() or _derive_alias_from_cmd(cmd)
+            alias = (item.get("alias") or "").strip() or _derive_alias_from_cmd(cmd)
             out.append((alias, cmd))
         return out
 
@@ -50,7 +42,6 @@ def _normalize_solvers(
         for s in solver_cmds:
             s = s.strip()
             alias: Optional[str] = None
-            # syntaxe "alias=CMD"
             if "=" in s and not s.startswith("[cwd="):
                 a, c = s.split("=", 1)
                 if "{inst}" in c:
@@ -59,30 +50,18 @@ def _normalize_solvers(
             if not alias:
                 alias = _derive_alias_from_cmd(s)
             out.append((alias, s))
-
     return out
 
 
 async def run_campaign_sequential(
     *,
-    solver_pairs: Optional[List[Dict[str, str]]] = None,  # NEW: optionnel + keyword-only
-    solver_cmds: Optional[List[str]] = None,              # NEW: optionnel + keyword-only
+    solver_pairs: Optional[List[Dict[str, str]]] = None,
+    solver_cmds: Optional[List[str]] = None,
     instances_dir: Path,
     pattern: str,
     out_dir: Path,
-    tag: str,
     timeout_sec: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """
-    Exécution séquentielle (solver × instance) avec logging streaming.
-    Compatible :
-      - UI/API : solver_pairs = [{alias, cmd}, ...]
-      - Tests/CLI anciens : solver_cmds = ["alias=CMD {inst}", "CMD {inst}", ...]
-    Écrit:
-      - {out_dir}/trajectories.csv
-      - {out_dir}/summary.csv
-    Retourne un payload JSON-serializable (chemins + résultats).
-    """
     instances_dir = Path(instances_dir)
     out_dir = Path(out_dir)
 
@@ -95,21 +74,28 @@ async def run_campaign_sequential(
         raise RuntimeError("Aucun solveur fourni (solver_pairs ou solver_cmds).")
 
     all_results: List[RunResult] = []
+
     for alias, cmd in defs:
         for inst in insts:
-            r = await run_one(
-                cmd_template=cmd,
-                inst_path=inst,
-                tag=tag,
-                timeout_sec=timeout_sec,
-                solver_alias=alias,
-            )
-            all_results.append(r)
-            # CSV par instance/tag
-            write_instance_csv(out_dir, tag, r)
+            # ouvrir logs du run
+            events_path, events_fp, meta_path, run_id = open_run_log(out_dir, alias, inst)
+            try:
+                r = await run_one(
+                    cmd_template=cmd,
+                    inst_path=inst,
+                    solver_alias=alias,
+                    solver_tag=alias,   # ou autre logique
+                    events_fp=events_fp,
+                    meta_path=meta_path,
+                    run_id=run_id,
+                    timeout_sec=timeout_sec,
+                )
+                all_results.append(r)
+            finally:
+                events_fp.close()
 
-    # CSV globaux
-    traj_csv, sum_csv = append_csv(out_dir, all_results)
+    # Agrégation globale
+    traj_csv, sum_csv = append_logs_summary(out_dir)
 
     payload: Dict[str, Any] = {
         "trajectories_csv": str(traj_csv),
@@ -121,5 +107,6 @@ async def run_campaign_sequential(
             }
             for r in all_results
         ],
+        "results_count": len(all_results),
     }
     return payload

@@ -9,13 +9,13 @@ description = "Orchestration MaxSAT: CLI + API, capture temps réel des coûts (
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-authors = [{name="Votre Nom"}]
+authors = [{name="uqam-amadou-florent"}]
 dependencies = [
   "typer>=0.12",
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "pandas>=2.2",
-  "matplotlib>=3.8",   # ← AJOUT
+  "matplotlib>=3.8",
 ]
 
 [project.optional-dependencies]

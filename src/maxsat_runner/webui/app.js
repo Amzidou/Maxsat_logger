@@ -106,7 +106,6 @@ async function submitJob() {
     instances_dir: document.getElementById("instances_dir").value.trim(),
     pattern: document.getElementById("pattern").value.trim(),
     out_dir: document.getElementById("out_dir").value.trim(),
-    tag: document.getElementById("tag").value.trim(),
   };
   if (timeout_sec) body.timeout_sec = timeout_sec;
 
@@ -253,7 +252,7 @@ async function submitStats() {
       prev.appendChild(card);
     }
 
-    // 2) Lien de téléchargement du CSV des moyennes
+    // Lien CSV des moyennes
     if (j.avg_scores_csv_url) {
       const wrap = document.createElement("div");
       wrap.className = "my-2";
@@ -277,7 +276,6 @@ async function submitStats() {
         "leaderboardWrap",
         "leaderboardTable"
       );
-      // Lien de téléchargement
       addDownloadLink(
         "leaderboardWrap",
         j.leaderboard_csv_url,
@@ -301,6 +299,30 @@ async function submitStats() {
       );
     } else {
       hideTable("leaderboardRelWrap", "leaderboardRelTable");
+    }
+
+    const galR = document.getElementById("meanGallery");
+    if (
+      Array.isArray(j.replicas_by_solver_plots) &&
+      j.replicas_by_solver_plots.length > 0
+    ) {
+      const row = document.createElement("div");
+      row.className = "row row-cols-1 row-cols-md-2 row-cols-lg-3 g-3";
+      for (const it of j.replicas_by_solver_plots) {
+        const col = document.createElement("div");
+        col.className = "col";
+        const url = addCacheBuster(it.url, Date.now());
+        col.innerHTML = `
+      <div class="card h-100">
+        <div class="card-header">Replicas – ${it.solver}</div>
+        <img class="card-img-top" src="${url}">
+        <div class="card-body">
+          <a href="${url}" target="_blank" rel="noopener">Ouvrir l'image</a>
+        </div>
+      </div>`;
+        row.appendChild(col);
+      }
+      galR.appendChild(row);
     }
 
     // Galerie COST par instance

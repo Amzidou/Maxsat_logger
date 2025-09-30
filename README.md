@@ -51,6 +51,7 @@ pip install -e ".[dev]"
 Installation rapide des extras clustering :
 
 ```bash
+pip install scikit-learn
 pip install networkx scipy fastdtw
 ```
 

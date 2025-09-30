@@ -9,6 +9,7 @@ import networkx as nx
 from fastdtw import fastdtw
 from scipy.spatial.distance import cosine as cosine_dist, euclidean, cityblock
 from scipy.stats import spearmanr, pearsonr
+from sklearn.cluster import KMeans
 
 from .segments import compute_relative_scores_timewindow_for_instance
 
@@ -193,6 +194,49 @@ def plot_mst(dist_df: pd.DataFrame, clusters_df: pd.DataFrame, out_png: Path) ->
     plt.close()
 
 
+
+
+def plot_kmeans(curves: Dict[str, np.ndarray], k: int, out_png: Path) -> None:
+    """
+    Applique KMeans sur les courbes (vecteurs T-dim).
+    Génère un scatter 2D via PCA pour visualiser les clusters.
+    """
+    from sklearn.decomposition import PCA
+
+    insts = list(curves.keys())
+    X = np.vstack([curves[i] for i in insts])  # matrice (n_instances × T)
+
+    # KMeans clustering
+    km = KMeans(n_clusters=k, random_state=42, n_init="auto")
+    labels = km.fit_predict(X)
+
+    # PCA pour réduire en 2D
+    X2d = PCA(n_components=2, random_state=42).fit_transform(X)
+
+    plt.figure(figsize=(8, 6), dpi=150)
+    scatter = plt.scatter(
+        X2d[:, 0], X2d[:, 1],
+        c=labels, cmap=plt.cm.Set2, s=120, alpha=0.85, edgecolors="k"
+    )
+
+    for i, inst in enumerate(insts):
+        plt.text(
+            X2d[i, 0] + 0.02, X2d[i, 1] + 0.02,
+            inst, fontsize=8
+        )
+
+    plt.title(f"KMeans clustering (k={k}) sur courbes normalisées")
+    plt.xlabel("PCA dim 1")
+    plt.ylabel("PCA dim 2")
+    plt.margins(0.1)
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_png, bbox_inches="tight")
+    plt.close()
+
+    return {inst: int(lbl) for inst, lbl in zip(insts, labels)}
+
+
 def generate_clusters(
     df_traj: pd.DataFrame,
     out_dir: Path,
@@ -214,13 +258,25 @@ def generate_clusters(
     dist_csv = out_dir / "distances.csv"
     clusters_csv = out_dir / f"clusters_{k}.csv"
     mst_png = out_dir / "mst.png"
+    kmeans_png = out_dir / "kmeans.png"
+    kmeans_csv = out_dir / f"clusters_kmeans_{k}.csv"
 
     dist_df.to_csv(dist_csv, index=False)
     clusters_df.to_csv(clusters_csv, index=False)
+    
     plot_mst(dist_df, clusters_df, mst_png)
+    kmeans_assignments = plot_kmeans(curves, k, kmeans_png)
+    
+    pd.DataFrame([
+        {"instance": inst, "cluster_id": cid}
+        for inst, cid in kmeans_assignments.items()
+    ]).to_csv(kmeans_csv, index=False)
 
     return {
         "distances_csv": str(dist_csv),
         f"clusters_csv": str(clusters_csv),
         "mst_png": str(mst_png),
+        "kmeans_png": str(kmeans_png),
+        "kmeans_assignments": kmeans_assignments,
+        "clusters_kmeans_csv": str(kmeans_csv),
     }

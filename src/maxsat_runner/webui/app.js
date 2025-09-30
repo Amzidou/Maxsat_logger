@@ -452,7 +452,10 @@ async function submitClusters() {
   const out_dir = document.getElementById("reports_dir").value.trim() || "reports";
   const k = parseInt(document.getElementById("clusters_k").value.trim(), 10) || 2;
   const metric = document.getElementById("clusters_metric").value;
-  const T = parseInt(document.getElementById("clusters_T").value.trim(), 10) || 100;
+  const T = parseInt(
+    document.getElementById("clusters_T")?.value.trim() || "100",
+    10
+  );
 
   const body = { runs_dir, out_dir, k, metric, T };
 
@@ -464,21 +467,44 @@ async function submitClusters() {
     });
     const j = await r.json();
     const container = document.getElementById("clustersResult");
+    container.innerHTML = ""; // reset avant affichage
     container.textContent = JSON.stringify(j, null, 2);
 
-    if (j.ok && j.mst_png_url) {
-      const img = document.createElement("img");
-      img.src = j.mst_png_url + "?t=" + Date.now();
-      img.className = "img-fluid mt-2";
-      container.appendChild(img);
+    if (j.ok) {
+      const ts = Date.now();
 
-      const link = document.createElement("a");
-      link.href = j.mst_png_url;
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.textContent = "Ouvrir l'image";
-      container.appendChild(document.createElement("br"));
-      container.appendChild(link);
+      // --- Affichage MST ---
+      if (j.mst_png_url) {
+        const mstCard = document.createElement("div");
+        mstCard.className = "card my-3";
+        mstCard.innerHTML = `
+          <div class="card-header">Clustering MST</div>
+          <div class="card-body">
+            <img src="${j.mst_png_url}?t=${ts}" class="img-fluid mb-2" alt="MST">
+            <div>
+              <a href="${j.mst_png_url}?t=${ts}" target="_blank" rel="noopener">Ouvrir l'image</a> |
+              <a href="${j.distances_mst_csv_url}?t=${ts}" target="_blank" rel="noopener">Télécharger distance CSV</a> |
+              <a href="${j.clusters_mst_csv_url}?t=${ts}" target="_blank" rel="noopener">Télécharger CSV</a>
+            </div>
+          </div>`;
+        container.appendChild(mstCard);
+      }
+
+      // --- Affichage KMeans ---
+      if (j.kmeans_png_url) {
+        const kmCard = document.createElement("div");
+        kmCard.className = "card my-3";
+        kmCard.innerHTML = `
+          <div class="card-header">Clustering KMeans</div>
+          <div class="card-body">
+            <img src="${j.kmeans_png_url}?t=${ts}" class="img-fluid mb-2" alt="KMeans">
+            <div>
+              <a href="${j.kmeans_png_url}?t=${ts}" target="_blank" rel="noopener">Ouvrir l'image</a> |
+              <a href="${j.clusters_kmeans_csv_url}?t=${ts}" target="_blank" rel="noopener">Télécharger CSV</a>
+            </div>
+          </div>`;
+        container.appendChild(kmCard);
+      }
     }
   } catch (e) {
     showMessage("Erreur réseau: " + e, "danger");

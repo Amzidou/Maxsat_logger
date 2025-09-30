@@ -227,9 +227,12 @@ def api_clusters(body: Dict):
         return JSONResponse({"ok": False, "error": str(ex)}, status_code=400)
 
     urls = {
-        "distances_csv_url": _path_to_data_url(Path(res["distances_csv"])),
-        "clusters_csv_url": _path_to_data_url(Path(res["clusters_csv"])),
+        "distances_mst_csv_url": _path_to_data_url(Path(res["distances_csv"])),
+        "clusters_mst_csv_url": _path_to_data_url(Path(res["clusters_csv"])),
         "mst_png_url": _path_to_data_url(Path(res["mst_png"])),
+        "clusters_kmeans_csv_url": _path_to_data_url(Path(res["clusters_kmeans_csv"])),
+        "mst_png_url": _path_to_data_url(Path(res["mst_png"])),
+        "kmeans_png_url": _path_to_data_url(Path(res["kmeans_png"])),
     }
     return {"ok": True, **res, **urls}
 

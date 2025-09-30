@@ -20,6 +20,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.2", "pytest-cov>=5.0"]
+clustering = [
+  "networkx>=3.3",
+  "scipy>=1.13",
+  "fastdtw>=0.3.4",
+]
 
 [project.scripts]
 maxsat-runner = "maxsat_runner.cli:app"

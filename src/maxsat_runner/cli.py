@@ -4,9 +4,11 @@ from typing import List, Optional, Tuple
 import typer
 import uvicorn
 import asyncio
+import pandas as pd
 
 from .core.campaign import run_campaign_sequential
 from .analytics.stats import generate_basic_reports
+from .analytics.similarities import generate_clusters
 
 app = typer.Typer(help="Orchestration MaxSAT: CLI & serveur API + UI")
 
@@ -76,6 +78,29 @@ def cli_stats(
         typer.echo(json.dumps({"ok": False, "error": str(ex)}, ensure_ascii=False, indent=2))
         raise typer.Exit(code=1)
 
+@app.command("clusters")
+def cli_clusters(
+    runs: str = typer.Option("data/runs", "--runs"),
+    out: str  = typer.Option("data/reports", "--out"),
+    by: str   = typer.Option("solver_alias", "--by"),
+    metric: str = typer.Option("spearman", "--metric", help="Métrique: spearman|pearson|cosine|l2|manhattan|dtw"),
+    k: int = typer.Option(2, "--k"),
+    t_min: Optional[float] = typer.Option(None, "--t-min"),
+    t_max: Optional[float] = typer.Option(None, "--t-max"),
+    T: int = typer.Option(100, "--T", help="Nombre de points de discrétisation des courbes")
+):
+    try:
+        traj_file = Path(runs) / "trajectories.csv"
+        if not traj_file.exists():
+            typer.echo(json.dumps({"ok": False, "error": f"Fichier introuvable: {traj_file}"}, ensure_ascii=False, indent=2))
+            raise typer.Exit(code=1)
+        df_traj = pd.read_csv(traj_file)
+
+        res = generate_clusters(df_traj, Path(out), by=by, metric=metric, k=k, t_min=t_min, t_max=t_max, T=T)
+        typer.echo(json.dumps({"ok": True, **res}, ensure_ascii=False, indent=2))
+    except Exception as ex:
+        typer.echo(json.dumps({"ok": False, "error": str(ex)}, ensure_ascii=False, indent=2))
+        raise typer.Exit(code=1)
 
 @app.command("serve")
 def cli_serve(

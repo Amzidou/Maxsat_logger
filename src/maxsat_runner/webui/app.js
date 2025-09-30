@@ -445,5 +445,45 @@ function parseCSV(text) {
   return rows.map((r) => r.map((x) => x.trim()));
 }
 
+// ======== Clusters =========
+
+async function submitClusters() {
+  const runs_dir = document.getElementById("runs_dir").value.trim() || "runs";
+  const out_dir = document.getElementById("reports_dir").value.trim() || "reports";
+  const k = parseInt(document.getElementById("clusters_k").value.trim(), 10) || 2;
+  const metric = document.getElementById("clusters_metric").value;
+  const T = parseInt(document.getElementById("clusters_T").value.trim(), 10) || 100;
+
+  const body = { runs_dir, out_dir, k, metric, T };
+
+  try {
+    const r = await fetch("/clusters", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    const container = document.getElementById("clustersResult");
+    container.textContent = JSON.stringify(j, null, 2);
+
+    if (j.ok && j.mst_png_url) {
+      const img = document.createElement("img");
+      img.src = j.mst_png_url + "?t=" + Date.now();
+      img.className = "img-fluid mt-2";
+      container.appendChild(img);
+
+      const link = document.createElement("a");
+      link.href = j.mst_png_url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "Ouvrir l'image";
+      container.appendChild(document.createElement("br"));
+      container.appendChild(link);
+    }
+  } catch (e) {
+    showMessage("Erreur réseau: " + e, "danger");
+  }
+}
+
 // init
 addSolver();

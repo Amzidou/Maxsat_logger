@@ -2,13 +2,15 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import time
 import asyncio
+import pandas as pd
 
 from fastapi import FastAPI, BackgroundTasks, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .core.campaign import run_campaign_sequential
-from .analytics.stats import generate_basic_reports  # stats driver
+from .analytics.stats import generate_basic_reports 
+from .analytics.similarities import generate_clusters
 
 api = FastAPI(title="MaxSAT Runner API", version="0.5.0")
 
@@ -196,6 +198,40 @@ def api_stats(body: Dict):
             "replicas_by_solver_plots": rep_solver_urls,
             "log_time": log_time}
 
+
+# ----------  CLUSTERS ----------
+@api.post("/clusters")
+def api_clusters(body: Dict):
+    runs_dir = body.get("runs_dir", "runs")
+    out_dir  = body.get("out_dir", "reports")
+    by       = body.get("by", "solver_alias")
+    metric   = body.get("metric", "spearman")
+    k        = int(body.get("k", 2))
+    T        = int(body.get("T", 100))
+    t_min    = body.get("t_min", None)
+    t_max    = body.get("t_max", None)
+
+    try:
+        runs_p = _safe_join_under_root(DATA_ROOT, runs_dir)
+        out_p  = _safe_join_under_root(DATA_ROOT, out_dir)
+        traj_file = runs_p / "trajectories.csv"
+        if not traj_file.exists():
+            return JSONResponse({"ok": False, "error": f"{traj_file} introuvable"}, status_code=404)
+        df_traj = pd.read_csv(traj_file)
+
+        res = generate_clusters(
+            df_traj, out_p,
+            by=by, metric=metric, k=k, t_min=t_min, t_max=t_max, T=T
+        )
+    except Exception as ex:
+        return JSONResponse({"ok": False, "error": str(ex)}, status_code=400)
+
+    urls = {
+        "distances_csv_url": _path_to_data_url(Path(res["distances_csv"])),
+        "clusters_csv_url": _path_to_data_url(Path(res["clusters_csv"])),
+        "mst_png_url": _path_to_data_url(Path(res["mst_png"])),
+    }
+    return {"ok": True, **res, **urls}
 
 # ---------- FS utilitaires ----------
 @api.post("/fs/mkdir")

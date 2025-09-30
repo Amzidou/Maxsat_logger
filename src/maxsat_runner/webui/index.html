@@ -159,7 +159,38 @@
     <!-- Galerie par instance (coût vs temps) -->
     <div id="instGallery" class="mt-3"></div>
     <hr />
+
+    <hr />
+    <form id="clustersForm" class="card p-3 mt-4">
+      <h4>Clustering des instances</h4>
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label for="clusters_k" class="form-label">Nombre de clusters</label>
+          <input type="number" class="form-control" id="clusters_k" value="2" />
+        </div>
+        <div class="col-md-6">
+          <label for="clusters_metric" class="form-label">Métrique (voir readme pour plus de details)</label>
+          <select class="form-select" id="clusters_metric">
+            <option value="spearman" selected>Spearman (corrélation)</option>
+            <option value="dtw">DTW </option>
+            <option value="l2">L2 (euclidienne)</option>
+            <option value="cosine">Cosine</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label for="clusters_T" class="form-label">T (points resampling)</label>
+          <input type="number" class="form-control" id="clusters_T" value="100" />
+        </div>
+      </div>
+      <div class="mt-3">
+        <button type="button" class="btn btn-info" onclick="submitClusters()">
+          Générer les clusters
+        </button>
+      </div>
+    </form>
+    <div id="clustersResult" class="mt-3"></div>
   </div>
-  <script src="app.js?v=100104"></script>
+  <script src="app.js?v=100105"></script>
 </body>
+
 </html>

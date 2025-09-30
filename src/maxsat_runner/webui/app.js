@@ -211,8 +211,9 @@ async function submitStats() {
   const t_min = readFloat("t_min");
   const t_max = readFloat("t_max");
   const t_at = readFloat("t_at");
+  const log_time = document.getElementById("log_time").checked;
 
-  const body = { runs_dir, out_dir, by };
+  const body = { runs_dir, out_dir, by, log_time };
   if (instance) body.instance = instance;
   if (t_min !== null) body.t_min = t_min;
   if (t_max !== null) body.t_max = t_max;
@@ -302,6 +303,7 @@ async function submitStats() {
     }
 
     const galR = document.getElementById("meanGallery");
+    galR.innerHTML = "";
     if (
       Array.isArray(j.replicas_by_solver_plots) &&
       j.replicas_by_solver_plots.length > 0
@@ -380,12 +382,24 @@ async function submitStats() {
   }
 }
 
-function addDownloadLink(wrapId, url, text) {
-  const wrap = document.getElementById(wrapId);
-  const div = document.createElement("div");
-  div.className = "px-3 pb-3";
-  div.innerHTML = `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
-  wrap.appendChild(div);
+function addDownloadLink(wrapperId, url, label) {
+  const wrap = document.getElementById(wrapperId);
+  if (!wrap || !url) return;
+
+  // on réutilise le même <a> si présent
+  let a = wrap.querySelector('a[data-role="download"]');
+  const href = addCacheBuster(url, Date.now());
+
+  if (!a) {
+    a = document.createElement("a");
+    a.setAttribute("data-role", "download");
+    a.className = "btn btn-sm btn-outline-primary ms-2";
+    wrap.prepend(a); // place le bouton en tête du wrapper (ou choisis appendChild)
+  }
+  a.href = href;
+  a.textContent = label || "Télécharger";
+  a.target = "_blank";
+  a.rel = "noopener";
 }
 
 // CSV parser minimal

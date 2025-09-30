@@ -147,6 +147,7 @@ def api_stats(body: Dict):
     t_min    = body.get("t_min", None)
     t_max    = body.get("t_max", None)
     t_at     = body.get("t_at", None)
+    log_time = bool(body.get("log_time", False))
 
     try:
         runs_p = _safe_join_under_root(DATA_ROOT, runs_dir)
@@ -157,7 +158,8 @@ def api_stats(body: Dict):
     try:
         res = generate_basic_reports(
             runs_p, out_p, by=by, instance_basename=instance,
-            t_min=t_min, t_max=t_max, t_at=t_at
+            t_min=t_min, t_max=t_max, t_at=t_at,
+            log_time=log_time
         )
     except Exception as ex:
         return JSONResponse({"ok": False, "error": str(ex)}, status_code=400)
@@ -191,7 +193,8 @@ def api_stats(body: Dict):
     return {"ok": True, **res, **urls,
             "instance_plots": inst_cost_urls,
             "instance_score_plots": inst_score_urls,
-            "replicas_by_solver_plots": rep_solver_urls}
+            "replicas_by_solver_plots": rep_solver_urls,
+            "log_time": log_time}
 
 
 # ---------- FS utilitaires ----------

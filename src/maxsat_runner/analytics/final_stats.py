@@ -6,6 +6,11 @@ import math
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
+import matplotlib.ticker as mtick
+from matplotlib.ticker import MultipleLocator
+from matplotlib.ticker import FixedLocator, FormatStrFormatter
+
 
 from .segments import compute_relative_scores_timewindow_for_instance
 
@@ -165,45 +170,119 @@ def plot_avg_scores_over_time(
     ts_df: pd.DataFrame,
     out_png: Path,
     by: str = "solver_alias",
+    log_time: bool = False,   # <- toggle simple
 ) -> None:
-    """Courbe step-post + marqueurs ; légende en bas par défaut."""
     if ts_df.empty:
         return
 
-    plt.figure(figsize=(8.5, 4.8), dpi=150)
+    plt.figure(figsize=(12, 10), dpi=150)
+    ax = plt.gca()
+
+    # Détermine l'échelle automatiquement si log_time=True
+    xs_all = ts_df.loc[~ts_df["avg_score"].isna(), "t"].astype(float).to_numpy()
+    use_log = False
+    use_log1p = False
+    if log_time:
+        if np.any(xs_all <= 0.0):
+            use_log1p = True
+        else:
+            use_log = True
+
     x_min = x_max = None
 
+    def xmap(x: np.ndarray) -> np.ndarray:
+        if use_log1p:
+            return np.log1p(x)
+        return x
+
+    # tracé par solver
     for s, g in ts_df.groupby(by):
         g = g.sort_values("t")
         g = g[~g["avg_score"].isna()]
         if g.empty:
             continue
-        xs = g["t"].astype(float).tolist()
-        ys = g["avg_score"].astype(float).tolist()
+        xs = g["t"].astype(float).to_numpy()
+        ys = g["avg_score"].astype(float).to_numpy()
 
-        # bornes X
-        lxmin, lxmax = min(xs), max(xs)
+        xs_plot = xmap(xs)
+        lxmin, lxmax = float(xs_plot.min()), float(xs_plot.max())
         x_min = lxmin if x_min is None else min(x_min, lxmin)
         x_max = lxmax if x_max is None else max(x_max, lxmax)
 
-        plt.step(xs, ys, where="post", linewidth=1.0, label=str(s))
-        plt.plot(xs, ys, ".", linewidth=0)
+        line, = ax.step(xs_plot, ys, where="post", linewidth=1.0, label=str(s))
+        color = line.get_color()
 
-    # axes
+        # tracer les points avec la même couleur
+        ax.plot(xs_plot, ys, ".", linewidth=0, color=color)
+
+    # Axes Y
+    BETA = 0.4      # contrôle l’étirement près de 1
+    MARGIN = 0.05   # marge en données (y peut aller de -0.05 à 1.05)
+
+    def y_forward(y):
+        y = np.asarray(y, dtype=float)
+        out = np.empty_like(y)
+
+        # zone normale [0,1]
+        mask_mid = (y >= 0.0) & (y <= 1.0)
+        out[mask_mid] = 1.0 - (1.0 - y[mask_mid])**BETA
+
+        # bas (<0) : linéaire
+        mask_low = (y < 0.0)
+        out[mask_low] = y[mask_low] * (0.1 / MARGIN)  # compressé dans 10% de l’espace bas
+
+        # haut (>1) : linéaire
+        mask_high = (y > 1.0)
+        out[mask_high] = 1.0 + (y[mask_high] - 1.0) * (0.1 / MARGIN)  # compressé en haut
+
+        return out
+
+    def y_inverse(z):
+        z = np.asarray(z, dtype=float)
+        out = np.empty_like(z)
+
+        # inverse zone mid
+        mask_mid = (z >= 0.0) & (z <= 1.0)
+        out[mask_mid] = 1.0 - (1.0 - z[mask_mid])**(1.0/BETA)
+
+        # inverse bas
+        mask_low = (z < 0.0)
+        out[mask_low] = z[mask_low] * (MARGIN / 0.1)
+
+        # inverse haut
+        mask_high = (z > 1.0)
+        out[mask_high] = 1.0 + (z[mask_high] - 1.0) * (MARGIN / 0.1)
+
+        return out
+
+    ax.set_yscale("function", functions=(y_forward, y_inverse))
+    ax.set_ylim(-MARGIN, 1.0 + MARGIN)
+
+    ax.yaxis.set_major_locator(FixedLocator([0.0,0.2,0.4,0.6,0.8,0.9,0.95,0.98,0.99,1.0]))
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+    ax.grid(True, which="both", alpha=0.25)
+    ax.set_ylabel("Average relative score (best/cost)")
+
+    # Axes X
     if x_min is not None and x_max is not None:
         span = max(1e-12, x_max - x_min)
         pad = max(0.03 * span, 1e-3)
-        left = max(0.0, x_min - pad)
-        right = x_max + pad
-        if right <= left:
-            right = left + max(pad, 1e-3)
-        plt.xlim(left, right)
-    plt.ylim(-0.05, 1.05)
+        if use_log:
+            # log base 10
+            left = max(1e-12, x_min)
+            right = max(left * 1.1, x_max)
+            ax.set_xscale("log", base=10)
+            ax.set_xlim(left - pad, right + pad + 1)
+            ax.xaxis.set_major_locator(mtick.LogLocator(base=10))
+            ax.xaxis.set_minor_locator(mtick.LogLocator(base=10, subs=np.arange(2, 10) * 0.1))
+            ax.xaxis.set_minor_formatter(mtick.NullFormatter())
+            ax.set_xlabel("Elapsed (sec, log)")
+        else:
+            ax.set_xlim(x_min - pad, x_max + pad)
+            ax.set_xlabel("log1p(Elapsed sec)" if use_log1p else "Elapsed (sec)")
 
-    plt.xlabel("Elapsed (sec)")
-    plt.ylabel("Average relative score (best/cost)")
-    plt.title("Average scores over time (per solver)")
-    _legend_bottom()  # légende en bas par défaut
+    ax.set_title("Average scores over time (per solver)")
+    _legend_bottom()
     _savefig(out_png)
 
 def save_avg_scores_csv(ts_df: pd.DataFrame, out_csv: Path) -> None:
@@ -216,6 +295,7 @@ def generate_final_score_summary(
     by: str = "solver_alias",
     t_min: Optional[float] = None,
     t_max: Optional[float] = None,
+    log_time: bool = False,
 ) -> Dict[str, str]:
     """Pipeline: segments → moyennes → CSV+PNG."""
     seg = collect_instance_segments(df_traj, by=by, t_min=t_min, t_max=t_max)
@@ -226,6 +306,6 @@ def generate_final_score_summary(
     out_png = out_dir / "average_scores_over_time.png"
 
     save_avg_scores_csv(ts, out_csv)
-    plot_avg_scores_over_time(ts, out_png, by=by)
+    plot_avg_scores_over_time(ts, out_png, by=by, log_time=log_time)
 
     return {"avg_scores_csv": str(out_csv), "avg_scores_png": str(out_png)}

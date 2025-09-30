@@ -57,7 +57,8 @@ def cli_stats(
     instance: Optional[str] = typer.Option(None, "--instance", help="Basename d'une instance pour tracer la trajectoire"),
     t_min: Optional[float] = typer.Option(None, "--t-min", help="Borne inférieure de temps (sec)"),
     t_max: Optional[float] = typer.Option(None, "--t-max", help="Borne supérieure de temps (sec)"),
-    t_at: Optional[float]  = typer.Option(None, "--t-at",  help="Snapshot à t_at (leaderboard relatif)")
+    t_at: Optional[float]  = typer.Option(None, "--t-at",  help="Snapshot à t_at (leaderboard relatif)"),
+    log_time: bool = typer.Option(False, "--log-time", help="Axe du temps en échelle logarithmique"),  
 ):
     try:
         res = generate_basic_reports(
@@ -68,6 +69,7 @@ def cli_stats(
             t_min=t_min,
             t_max=t_max,
             t_at=t_at,
+            log_time=log_time,
         )
         typer.echo(json.dumps({"ok": True, **res}, ensure_ascii=False, indent=2))
     except Exception as ex:

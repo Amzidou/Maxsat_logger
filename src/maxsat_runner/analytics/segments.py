@@ -6,11 +6,25 @@ import math
 
 # ---------- Helpers temps / segments ----------
 
+def _match_instance_name(df: pd.DataFrame, instance_basename: str) -> pd.DataFrame:
+    """
+    Sélectionne les lignes correspondant à une instance donnée,
+    en tolérant les variantes comme *.wcnf.gz, *.xml.wcnf, etc.
+    """
+    # normaliser en minuscule
+    name = instance_basename.lower()
+    # Si l'utilisateur a donné "BrazilInstance1", on matche tout ce qui contient ce nom
+    # et se termine par une extension MaxSAT connue
+    possible_suffixes = [".wcnf", ".wcnf.gz", ".cnf", ".cnf.gz"]
+    mask = df["basename"].str.lower().apply(
+        lambda x: any(x.endswith(suf) and name in x for suf in possible_suffixes)
+    )
+    return df[mask]
+
 def _instance_window(df_traj: pd.DataFrame, instance_basename: str) -> Tuple[float, float]:
     df = df_traj.copy()
     df["basename"] = df["instance"].apply(lambda p: Path(str(p)).name)
-    cand = instance_basename if instance_basename.endswith(".wcnf") else (instance_basename + ".wcnf")
-    sub = df[df["basename"] == cand]
+    sub = _match_instance_name(df, instance_basename)
     if sub.empty:
         return (0.0, 0.0)
     tmin = float(sub["elapsed_sec"].min())
@@ -81,7 +95,8 @@ def compute_relative_scores_timewindow_for_instance(
     """
     df = df_traj.copy()
     df["basename"] = df["instance"].apply(lambda p: Path(str(p)).name)
-    cand = instance_basename if instance_basename.endswith(".wcnf") else (instance_basename + ".wcnf")
+    cand = instance_basename
+    
     sub = df[df["basename"] == cand]
     if sub.empty:
         return pd.DataFrame(columns=["instance","t_start","t_end","duration","solver","score","cost","best_cost"])

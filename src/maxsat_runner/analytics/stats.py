@@ -11,7 +11,7 @@ import matplotlib.ticker as mtick
 from matplotlib.scale import FuncScale
 from matplotlib.ticker import FixedLocator, FormatStrFormatter
 
-from .segments import compute_relative_scores_timewindow_for_instance
+from .segments import compute_relative_scores_timewindow_for_instance, _match_instance_name
 from .final_stats import generate_final_score_summary
 
 # ===================== Utils =====================
@@ -353,8 +353,8 @@ def plot_trajectory_for_instance(
 ) -> None:
     df = df_traj.copy()
     df["basename"] = df["instance"].apply(lambda p: Path(str(p)).name)
-    candidate = instance_basename if instance_basename.endswith(".wcnf") else (instance_basename + ".wcnf")
-    sub = df[df["basename"] == candidate]
+    sub = _match_instance_name(df, instance_basename)
+    
     if sub.empty:
         return
 

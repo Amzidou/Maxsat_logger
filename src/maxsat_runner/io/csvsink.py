@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Tuple
+import re
 import pandas as pd
 from ..core.types import RunResult
 
@@ -44,13 +45,25 @@ def append_csv(out_dir: Path, results: List[RunResult]) -> Tuple[Path, Path]:
 
     return traj_csv, sum_csv
 
-def write_instance_csv(out_dir: Path, tag: str, r: RunResult) -> Path:
+
+def _clean_instance_basename(name: str) -> str:
+    """
+    Supprime les suffixes .wcnf, .wcnf.gz, .cnf, .cnf.gz, .xml.wcnf, etc.
+    """
+    name = re.sub(r"(\.xml)?\.wcnf(\.gz)?$", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\.cnf(\.gz)?$", "", name, flags=re.IGNORECASE)
+    return name
+
+def write_instance_csv(out_dir: Path, tag: str, r: "RunResult") -> Path:
+    """
+    Écrit les événements d’un run dans un CSV :
+      out_dir / <solver_tag> / <instance_base>.csv
+    """
+    # Créer dossier pour le solver
     tag_dir = out_dir / tag
     tag_dir.mkdir(parents=True, exist_ok=True)
-    import os
-    base = os.path.basename(r.instance)
-    if base.lower().endswith(".wcnf"):
-        base = base[:-5]
+
+    base = _clean_instance_basename(Path(r.instance).name)
     inst_csv = tag_dir / f"{base}.csv"
 
     rows = [{

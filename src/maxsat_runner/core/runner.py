@@ -219,10 +219,14 @@ async def run_one(
 
 def list_instances(instances_dir: Path, pattern: str) -> List[Path]:
     """
-    Liste les fichiers du répertoire dont le suffixe correspond à 'pattern'.
+    Liste les fichiers du répertoire dont le nom contient le 'pattern'.
     Si pattern == "", on prend tous les fichiers.
+    Exemples :
+      pattern=".wcnf"  → match aussi .wcnf.gz
+      pattern=".cnf"   → match *.cnf, *.cnf.gz, *.dimacs.cnf, etc.
     """
+    pattern = pattern.strip()
     return sorted(
         p for p in Path(instances_dir).iterdir()
-        if p.is_file() and (pattern == "" or p.suffix == pattern)
+        if p.is_file() and (not pattern or pattern in p.name)
     )

@@ -101,6 +101,7 @@ maxsat-runner run   --solver "solverA=/chemin/solverA {inst}"   --solver "solver
 **Règles & options :**
 - Chaque `--solver` **doit contenir `{inst}`** (remplacé par le chemin absolu de l’instance).
 - `--pattern` filtre par extension (ex : `.wcnf`). Laissez vide pour prendre tous les fichiers.
+- `--instances` Chemin vers les instances à traiter. Peut être un répertoire (plusieurs fichiers) ou un fichier unique (une seule instance).
 - `--timeout-sec` (optionnel) : arrêt au dépassement, avec `exit_code = 124`.
 - Sorties :
   - **Logs par run** dans `data/runs/logs/` (événements et méta),

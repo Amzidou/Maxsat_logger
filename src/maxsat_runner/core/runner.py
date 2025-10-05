@@ -219,14 +219,36 @@ async def run_one(
 
 def list_instances(instances_dir: Path, pattern: str) -> List[Path]:
     """
-    Liste les fichiers du répertoire dont le nom contient le 'pattern'.
-    Si pattern == "", on prend tous les fichiers.
+    Liste les fichiers d'instances à exécuter :
+      - Si 'instances_dir' est un fichier : vérifie qu'il existe et le retourne seul.
+      - Si c'est un dossier : liste tous les fichiers dont le nom contient 'pattern'.
     Exemples :
-      pattern=".wcnf"  → match aussi .wcnf.gz
-      pattern=".cnf"   → match *.cnf, *.cnf.gz, *.dimacs.cnf, etc.
+      pattern=".wcnf"  → match aussi .wcnf.gz, .xml.wcnf, .dimacs.wcnf, etc.
+      pattern=".cnf"   → match aussi .cnf, .cnf.gz, .dimacs.cnf, etc.
     """
-    pattern = pattern.strip()
-    return sorted(
-        p for p in Path(instances_dir).iterdir()
-        if p.is_file() and (not pattern or pattern in p.name)
+    instances_dir = Path(instances_dir)
+
+    # Cas 1: un fichier individuel
+    if instances_dir.is_file():
+        if not instances_dir.exists():
+            raise FileNotFoundError(f"Fichier spécifié introuvable : {instances_dir}")
+        return [instances_dir.resolve()]
+
+    # Cas 2: un dossier contenant plusieurs instances
+    if not instances_dir.exists():
+        raise FileNotFoundError(f"Dossier spécifié introuvable : {instances_dir}")
+
+    pattern = pattern.strip().lower()
+    instances = sorted(
+        p for p in instances_dir.iterdir()
+        if p.is_file() and (
+            not pattern
+            or pattern in p.name.lower()
+            or (pattern == ".wcnf" and p.name.lower().endswith((".wcnf.gz", ".xml.wcnf", ".xml.wcnf.gz")))
+            or (pattern == ".cnf"  and p.name.lower().endswith((".cnf", ".cnf.gz", ".dimacs.cnf")))
+        )
     )
+
+    if not instances:
+        print(f"Aucune instance trouvée dans {instances_dir} avec le pattern '{pattern}'")
+    return instances

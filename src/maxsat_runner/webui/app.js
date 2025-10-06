@@ -237,6 +237,7 @@ async function submitStats() {
       ["Time to Best (box)", j.plot_time_to_best_box_url],
       ["Trajectoire (instance)", j.plot_trajectory_url],
       ["Average scores over time", j.avg_scores_png_url],
+      ["Distribution scores over time", j.score_dist_png_url],
     ];
     for (const [title, url0] of imgs) {
       const url = addCacheBuster(url0, ts);

@@ -177,6 +177,8 @@ def api_stats(body: Dict):
         "leaderboard_relative_csv_url": u(res["leaderboard_relative_csv"]),
         "avg_scores_csv_url": _path_to_data_url(Path(res["avg_scores_csv"])) if res.get("avg_scores_csv") else None,
         "avg_scores_png_url": _path_to_data_url(Path(res["avg_scores_png"])) if res.get("avg_scores_png") else None,
+        "score_dist_csv_url": _path_to_data_url(Path(res["score_dist_csv"])) if res.get("score_dist_csv") else None,
+        "score_dist_png_url": _path_to_data_url(Path(res["score_dist_png"])) if res.get("score_dist_png") else None,
         "replicas_by_solver_csv_url": u(res.get("replicas_by_solver_csv")),
     }
 

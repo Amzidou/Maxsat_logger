@@ -207,36 +207,87 @@ def api_clusters(body: Dict):
     runs_dir = body.get("runs_dir", "runs")
     out_dir  = body.get("out_dir", "reports")
     by       = body.get("by", "solver_alias")
-    metric   = body.get("metric", "spearman")
+    metric   = str(body.get("metric", "spearman")).lower().strip()
     k        = int(body.get("k", 2))
     T        = int(body.get("T", 100))
     t_min    = body.get("t_min", None)
     t_max    = body.get("t_max", None)
+    sampling = str(body.get("sampling", "linear")).lower().strip()
+    ratio    = float(body.get("ratio", 1.10))
+
+    # Validations simples
+    valid_metrics = {"spearman", "pearson", "cosine", "l2", "euclidean", "manhattan", "l1", "dtw"}
+    if metric not in valid_metrics:
+        return JSONResponse(
+            {"ok": False, "error": f"Métrique invalide: {metric}. Autorisées: {sorted(valid_metrics)}"},
+            status_code=400
+        )
+
+    valid_sampling = {"linear", "log","geom"}
+    if sampling not in valid_sampling:
+        return JSONResponse(
+            {"ok": False, "error": f"Sampling invalide: {sampling}. Autorisés: {sorted(valid_sampling)}"},
+            status_code=400
+        )
+    if sampling == "log" and ratio <= 0:
+        return JSONResponse(
+            {"ok": False, "error": f"ratio doit être > 0 quand sampling=log (reçu {ratio})"},
+            status_code=400
+        )
+
+    # Conversion prudente de t_min/t_max si fournis en string
+    def _to_float_or_none(v):
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except Exception:
+            return None
+
+    t_min = _to_float_or_none(t_min)
+    t_max = _to_float_or_none(t_max)
 
     try:
         runs_p = _safe_join_under_root(DATA_ROOT, runs_dir)
         out_p  = _safe_join_under_root(DATA_ROOT, out_dir)
+
         traj_file = runs_p / "trajectories.csv"
         if not traj_file.exists():
             return JSONResponse({"ok": False, "error": f"{traj_file} introuvable"}, status_code=404)
+
         df_traj = pd.read_csv(traj_file)
 
+        # Passe les nouveaux params jusqu’à similarities.generate_clusters
         res = generate_clusters(
             df_traj, out_p,
-            by=by, metric=metric, k=k, t_min=t_min, t_max=t_max, T=T
+            by=by, metric=metric, k=k,
+            t_min=t_min, t_max=t_max, T=T,
+            sampling=sampling, ratio=ratio,
         )
+
     except Exception as ex:
         return JSONResponse({"ok": False, "error": str(ex)}, status_code=400)
 
+    # URLs publiques (clé 'mst_png_url' non dupliquée)
     urls = {
-        "distances_mst_csv_url": _path_to_data_url(Path(res["distances_csv"])),
-        "clusters_mst_csv_url": _path_to_data_url(Path(res["clusters_csv"])),
-        "mst_png_url": _path_to_data_url(Path(res["mst_png"])),
+        "distances_csv_url":       _path_to_data_url(Path(res["distances_csv"])),
+        "clusters_csv_url":        _path_to_data_url(Path(res["clusters_csv"])),          # MST cut
+        "mst_png_url":             _path_to_data_url(Path(res["mst_png"])),
         "clusters_kmeans_csv_url": _path_to_data_url(Path(res["clusters_kmeans_csv"])),
-        "mst_png_url": _path_to_data_url(Path(res["mst_png"])),
-        "kmeans_png_url": _path_to_data_url(Path(res["kmeans_png"])),
+        "kmeans_png_url":          _path_to_data_url(Path(res["kmeans_png"])),
     }
-    return {"ok": True, **res, **urls}
+
+    # Récapitulatif pratique
+    summary = {
+        "params": {
+            "runs_dir": runs_dir, "out_dir": out_dir, "by": by,
+            "metric": metric, "k": k, "T": T,
+            "t_min": t_min, "t_max": t_max,
+            "sampling": sampling, "ratio": ratio,
+        }
+    }
+
+    return {"ok": True, **summary, **res, **urls}
 
 # ---------- FS utilitaires ----------
 @api.post("/fs/mkdir")

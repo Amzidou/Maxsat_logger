@@ -448,17 +448,26 @@ function parseCSV(text) {
 
 // ======== Clusters =========
 
+// ======== Clusters =========
 async function submitClusters() {
   const runs_dir = document.getElementById("runs_dir").value.trim() || "runs";
-  const out_dir = document.getElementById("reports_dir").value.trim() || "reports";
-  const k = parseInt(document.getElementById("clusters_k").value.trim(), 10) || 2;
+  const out_dir =
+    document.getElementById("reports_dir").value.trim() || "reports";
+  const k =
+    parseInt(document.getElementById("clusters_k").value.trim(), 10) || 2;
   const metric = document.getElementById("clusters_metric").value;
-  const T = parseInt(
-    document.getElementById("clusters_T")?.value.trim() || "100",
-    10
-  );
+  const T =
+    parseInt(
+      (document.getElementById("clusters_T").value || "100").trim(),
+      10
+    ) || 100;
 
-  const body = { runs_dir, out_dir, k, metric, T };
+  // nouveaux paramètres
+  const sampling = document.getElementById("clusters_sampling").value; // 'linear' | 'log'
+  const alphaRaw = document.getElementById("clusters_ratio").value;
+  const ratio = alphaRaw === "" ? 3.0 : Number(alphaRaw);
+
+  const body = { runs_dir, out_dir, k, metric, T, sampling, ratio };
 
   try {
     const r = await fetch("/clusters", {
@@ -467,45 +476,77 @@ async function submitClusters() {
       body: JSON.stringify(body),
     });
     const j = await r.json();
-    const container = document.getElementById("clustersResult");
+
+    const container = document.getElementById("out");
     container.innerHTML = ""; // reset avant affichage
     container.textContent = JSON.stringify(j, null, 2);
 
-    if (j.ok) {
-      const ts = Date.now();
+    if (!j.ok) return;
 
-      // --- Affichage MST ---
-      if (j.mst_png_url) {
-        const mstCard = document.createElement("div");
-        mstCard.className = "card my-3";
-        mstCard.innerHTML = `
-          <div class="card-header">Clustering MST</div>
-          <div class="card-body">
-            <img src="${j.mst_png_url}?t=${ts}" class="img-fluid mb-2" alt="MST">
-            <div>
-              <a href="${j.mst_png_url}?t=${ts}" target="_blank" rel="noopener">Ouvrir l'image</a> |
-              <a href="${j.distances_mst_csv_url}?t=${ts}" target="_blank" rel="noopener">Télécharger distance CSV</a> |
-              <a href="${j.clusters_mst_csv_url}?t=${ts}" target="_blank" rel="noopener">Télécharger CSV</a>
-            </div>
-          </div>`;
-        container.appendChild(mstCard);
-      }
+    const result = document.getElementById("clustersResult");
+    result.innerHTML = ""; // reset avant affichage
 
-      // --- Affichage KMeans ---
-      if (j.kmeans_png_url) {
-        const kmCard = document.createElement("div");
-        kmCard.className = "card my-3";
-        kmCard.innerHTML = `
-          <div class="card-header">Clustering KMeans</div>
-          <div class="card-body">
-            <img src="${j.kmeans_png_url}?t=${ts}" class="img-fluid mb-2" alt="KMeans">
-            <div>
-              <a href="${j.kmeans_png_url}?t=${ts}" target="_blank" rel="noopener">Ouvrir l'image</a> |
-              <a href="${j.clusters_kmeans_csv_url}?t=${ts}" target="_blank" rel="noopener">Télécharger CSV</a>
-            </div>
-          </div>`;
-        container.appendChild(kmCard);
-      }
+    const ts = Date.now();
+
+    // Clés robustes (compat v1 et v2)
+    const distancesCsvUrl = j.distances_csv_url || j.distances_mst_csv_url;
+    const clustersCsvUrl = j.clusters_csv_url || j.clusters_mst_csv_url;
+    const mstPngUrl = j.mst_png_url;
+    const kmeansPngUrl = j.kmeans_png_url;
+    const kmeansCsvUrl = j.clusters_kmeans_csv_url;
+
+    // --- Carte MST --- archived
+    // if (mstPngUrl) {
+    //   const mstCard = document.createElement("div");
+    //   mstCard.className = "card my-3";
+    //   mstCard.innerHTML = `
+    //     <div class="card-header">Clustering MST</div>
+    //     <div class="card-body">
+    //       <img src="${mstPngUrl}?t=${ts}" class="img-fluid mb-2" alt="MST">
+    //       <div class="small">
+    //         ${
+    //           distancesCsvUrl
+    //             ? `<a href="${distancesCsvUrl}?t=${ts}" target="_blank" rel="noopener">Télécharger distances.csv</a> | `
+    //             : ""
+    //         }
+    //         ${
+    //           clustersCsvUrl
+    //             ? `<a href="${clustersCsvUrl}?t=${ts}" target="_blank" rel="noopener">Télécharger clusters_mst.csv</a>`
+    //             : ""
+    //         }
+    //       </div>
+    //     </div>`;
+    //   result.appendChild(mstCard);
+    // }
+
+    // --- Carte KMeans ---
+    if (kmeansPngUrl) {
+      const kmCard = document.createElement("div");
+      kmCard.className = "card my-3";
+      kmCard.innerHTML = `
+        <div class="card-header">Clustering KMeans</div>
+        <div class="card-body">
+          <img src="${kmeansPngUrl}?t=${ts}" class="img-fluid mb-2" alt="KMeans">
+          <div class="small">
+            ${
+              kmeansCsvUrl
+                ? `<a href="${kmeansCsvUrl}?t=${ts}" target="_blank" rel="noopener">Télécharger clusters_kmeans.csv</a>`
+                : ""
+            }
+          </div>
+        </div>`;
+      result.appendChild(kmCard);
+    }
+
+    // --- Tableau (résumé clusters MST si dispo) ---
+    const wrap = document.getElementById("clustersTableWrap");
+    const tableId = "clustersTable";
+    if (clustersCsvUrl && typeof renderCSVTable === "function") {
+      await renderCSVTable(clustersCsvUrl, "clustersTableWrap", tableId);
+    } else {
+      // si pas de CSV ou pas de helper, on masque le wrapper
+      wrap.style.display = "none";
+      document.getElementById(tableId).innerHTML = "";
     }
   } catch (e) {
     showMessage("Erreur réseau: " + e, "danger");

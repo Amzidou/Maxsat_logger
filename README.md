@@ -162,6 +162,19 @@ Rapports produits (principaux) :
 
 ### Clustering
 
+**Paramètres clés**
+
+* `--metric` : `spearman|pearson|cosine|l2|manhattan|dtw`
+* `--T` : points de discrétisation de la courbe
+* `--sampling` : `linear|log`
+* `--ratio` : front-loading si `--sampling=log`
+* `--t-min`, `--t-max` : fenêtre d’analyse
+
+---
+
+
+**Utilisation (CLI)**
+
 ```bash
 maxsat-runner clusters \
   --runs data/runs \
@@ -169,7 +182,29 @@ maxsat-runner clusters \
   --by solver_alias \
   --metric spearman \
   --k 3 \
-  --t-min 0 --t-max 10
+  --t-min 0 --t-max 10 \
+  --T 100 \
+  --sampling log \
+  --ratio 1.25
+```
+
+**Utilisation (API)**
+
+**POST** `/clusters`
+
+```json
+{
+  "runs_dir": "runs",
+  "out_dir": "reports",
+  "by": "solver_alias",
+  "metric": "spearman",
+  "k": 3,
+  "t_min": 0.0,
+  "t_max": 10.0,
+  "T": 100,
+  "sampling": "log",
+  "ratio": 1.25
+}
 ```
 
 **Métriques disponibles :**
@@ -205,25 +240,35 @@ maxsat-runner clusters \
   - Pertinent si les solveurs atteignent leurs améliorations au même rythme relatif, mais pas aux mêmes timestamps.
 
 
-**Paramètre supplémentaire :**
 
-* `--T` (défaut 100) : nombre de points pour la discrétisation des courbes score(t).
 
-  * `T` = **nombre de points d’échantillonnage sur la durée totale du run**
-  * Plus `T` est grand → meilleure résolution temporelle, mais aussi **plus de bruit** (et calculs plus lourds).
-  * Plus `T` est petit → les courbes sont compressées, tu perds de la finesse (risque de lisser trop les comportements rapides).
-  
-  * Supposons un run qui dure 10 secondes et produit 300 événements. 
-    * Si `T = 50` → tu prends un point tous les 0.2s → courbe lissée.
-    * Si `T = 200` → tu prends un point tous les 0.05s → courbe détaillée.
+**Paramètres d’échantillonnage : `T`, `sampling`, `ratio`**
 
-  *  Bonnes pratiques pour choisir `T`.
+Les segments score(t) sont convertis en une **courbe discrète** de longueur `T`.
 
-      * **Petits problèmes / runs très rapides** → `T = 50` ou `100` suffit.
-      * **Gros benchmarks / runs longs** → tu peux monter à `T = 200` ou `300`.
-      * **Clustering rapide** (exploration initiale) → `T = 50`.
-      * **Analyse fine / publication scientifique** → `T = 200`+ pour capturer les détails.
+* **`T`** (défaut `100`) — *résolution temporelle*
 
+  * Petit (`50–100`) : rapide, **plus lissé**.
+  * Grand (`200–300`) : **plus fin**, mais plus coûteux et parfois plus bruyant.
+
+* **`sampling`** ∈ `{linear, log}`
+
+  * `linear` : grille **uniforme** entre `t_min` et `t_max`.
+  * `log` : **front-loading** du début (plus de points près de `t_min`) pour récompenser la **vitesse initiale d’amélioration**. Continu, favorise le début de la courbe : u(r) = (ratioʳ - 1) / (ratio - 1) → densifie la zone initiale (utile pour les solveurs "anytime" qui progressent vite au début).
+  * `geom` : Discret et exponentiel : uₖ = (ratioᵏ - 1) / (ratio^(T−1) - 1) → plus ratio est grand, plus les points sont concentrés vers t₀. Idéal pour les phases fortement front-loaded (par ex. solveurs SLS rapides).
+
+* **`ratio`** (utilisé si `sampling=log`) — *intensité du front-loading*
+  On génère une abscisse normalisée `u ∈ [0,1]`, puis on applique `x = u^(1/ratio)` ; plus `ratio` est **grand**, plus on densifie **près de `t_min`**.
+
+  * `ratio = 1.0` → identique à `linear`
+  * `ratio = 1.1` → léger biais vers le début
+  * `ratio = 2.0` → fort biais (beaucoup de points au démarrage)
+
+**Règles pratiques**
+
+* **Bench rapides** → `T=50..100`, `sampling=linear` ; tester `sampling=log` si la phase initiale est critique.
+* **Longs runs** → `T=200..300` si vous avez besoin de finesse ; sinon restez à 100.
+* Pour comparer des **rythmes décalés**, préférer `dtw` (avec `fastdtw`) ou `sampling=log`+corrélation.
 
 
 Sorties :

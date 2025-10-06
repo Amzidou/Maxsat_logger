@@ -80,24 +80,91 @@ def cli_stats(
 
 @app.command("clusters")
 def cli_clusters(
-    runs: str = typer.Option("data/runs", "--runs"),
-    out: str  = typer.Option("data/reports", "--out"),
-    by: str   = typer.Option("solver_alias", "--by"),
-    metric: str = typer.Option("spearman", "--metric", help="Métrique: spearman|pearson|cosine|l2|manhattan|dtw"),
-    k: int = typer.Option(2, "--k"),
-    t_min: Optional[float] = typer.Option(None, "--t-min"),
-    t_max: Optional[float] = typer.Option(None, "--t-max"),
-    T: int = typer.Option(100, "--T", help="Nombre de points de discrétisation des courbes")
+    runs: str = typer.Option("data/runs", "--runs", help="Dossier contenant trajectories.csv"),
+    out: str  = typer.Option("data/reports", "--out", help="Dossier de sortie des rapports"),
+    by: str   = typer.Option("solver_alias", "--by", help="Clé d’agrégation (solver_alias|solver_cmd|solver_tag)"),
+    metric: str = typer.Option(
+        "spearman", "--metric",
+        help="Métrique de distance: spearman|pearson|cosine|l2|manhattan|dtw"
+    ),
+    k: int = typer.Option(2, "--k", help="Nombre de clusters"),
+    t_min: Optional[float] = typer.Option(None, "--t-min", help="Borne inférieure de temps (sec)"),
+    t_max: Optional[float] = typer.Option(None, "--t-max", help="Borne supérieure de temps (sec)"),
+    T: int = typer.Option(100, "--T", help="Nombre de points de discrétisation des courbes"),
+    sampling: str = typer.Option(
+        "linear", "--sampling",
+        help="Schéma d’échantillonnage: linear|log (log sur-pondère le début)"
+    ),
+    ratio: float = typer.Option(
+        1.10, "--ratio",
+       help="Intensité du front-loading quand --sampling=log (ratio>1 → plus de poids au début)"
+    ),
 ):
     try:
+        # Validations simples
+        metric = metric.lower().strip()
+        sampling = sampling.lower().strip()
+
+        valid_metrics = {"spearman", "pearson", "cosine", "l2", "euclidean", "manhattan", "l1", "dtw"}
+        if metric not in valid_metrics:
+            typer.echo(json.dumps({
+                "ok": False,
+                "error": f"Métrique invalide: {metric}. Autorisées: {sorted(valid_metrics)}"
+            }, ensure_ascii=False, indent=2))
+            raise typer.Exit(code=1)
+
+        valid_sampling = {"linear", "log", "geom"}
+        if sampling not in valid_sampling:
+            typer.echo(json.dumps({
+                "ok": False,
+                "error": f"Sampling invalide: {sampling}. Autorisés: {sorted(valid_sampling)}"
+            }, ensure_ascii=False, indent=2))
+            raise typer.Exit(code=1)
+
+        if sampling == "log" and ratio <= 0:
+            typer.echo(json.dumps({
+                "ok": False,
+                "error": f"ratio doit être > 0 quand --sampling=log (reçu {ratio})"
+            }, ensure_ascii=False, indent=2))
+            raise typer.Exit(code=1)
+
         traj_file = Path(runs) / "trajectories.csv"
         if not traj_file.exists():
             typer.echo(json.dumps({"ok": False, "error": f"Fichier introuvable: {traj_file}"}, ensure_ascii=False, indent=2))
             raise typer.Exit(code=1)
+
         df_traj = pd.read_csv(traj_file)
 
-        res = generate_clusters(df_traj, Path(out), by=by, metric=metric, k=k, t_min=t_min, t_max=t_max, T=T)
-        typer.echo(json.dumps({"ok": True, **res}, ensure_ascii=False, indent=2))
+        res = generate_clusters(
+            df_traj,
+            Path(out),
+            by=by,
+            metric=metric,
+            k=k,
+            t_min=t_min,
+            t_max=t_max,
+            T=T,
+            sampling=sampling,
+            ratio=ratio,
+        )
+
+        typer.echo(json.dumps({
+            "ok": True,
+            "params": {
+                "runs": runs,
+                "out": out,
+                "by": by,
+                "metric": metric,
+                "k": k,
+                "t_min": t_min,
+                "t_max": t_max,
+                "T": T,
+                "sampling": sampling,
+                "alpha": alpha,
+            },
+            **res
+        }, ensure_ascii=False, indent=2))
+
     except Exception as ex:
         typer.echo(json.dumps({"ok": False, "error": str(ex)}, ensure_ascii=False, indent=2))
         raise typer.Exit(code=1)

@@ -694,10 +694,13 @@ def generate_basic_reports(
     - Average scores over time — géré dans final_stats avec étirement Y près de 1
     - Réplicas par solveur (CSV + PNG)
     """
+    print(f"=== Génération des rapports basiques dans {out_dir} ===")
     # 1) rebuild (moyennes)
+    print("Chargement des runs et (re)construction des moyennes...")
     df_traj, df_sum = load_runs(runs_dir)
 
     # 2) Leaderboard simple
+    print("Génération du leaderboard simple...")
     lb = compute_leaderboard(df_sum, by=by)
     out_dir.mkdir(parents=True, exist_ok=True)
     lb_csv = out_dir / "leaderboard.csv"
@@ -706,11 +709,13 @@ def generate_basic_reports(
     plot_time_to_best_box(df_sum, out_dir / "plot_time_to_best_box.png", by=by)
 
     # 3) Leaderboard relatif (fenêtre temporelle)
+    print("Génération du leaderboard relatif...")
     lb_rel = aggregate_relative_leaderboard(df_traj, by=by, t_min=t_min, t_max=t_max, t_at=t_at)
     lb_rel_csv = out_dir / "leaderboard_relative.csv"
     lb_rel.to_csv(lb_rel_csv, index=False)
 
     # 4) Trajectoires coût/temps
+    print("Génération des trajectoires coût/temps par instance...")
     traj_png = None
     if instance_basename:
         traj_png = out_dir / f"plot_trajectory_{instance_basename}.png"
@@ -718,12 +723,15 @@ def generate_basic_reports(
     instance_cost_plots = plot_all_instances(df_traj, out_dir, by=by, log_time=log_time) if per_instance else []
 
     # 5) Scores(t) par instance
+    print("Génération des scores(t) par instance...")
     instance_score_plots = plot_all_instances_scores(df_traj, out_dir, by=by, t_min=t_min, t_max=t_max, log_time=log_time)
 
     # 6) Moyennes temporelles globales (dans final_stats) — inclut la logique d’échelle X et Y
+    print("Génération des statistiques finales temporelles...")
     finals = generate_final_score_summary(df_traj, out_dir=out_dir, by=by, t_min=t_min, t_max=t_max, log_time=log_time)
 
     # 7) Réplicas **par solveur**
+    print("Génération des statistiques de réplicas par solveur...")
     df_rep_solver = compute_replicas_by_solver_stats(runs_dir, by=by)
     rep_csv = out_dir / "replicas_by_solver.csv"
     df_rep_solver.to_csv(rep_csv, index=False)

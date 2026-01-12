@@ -8,6 +8,8 @@ import tempfile
 import pandas as pd
 import shlex
 import csv
+import logging
+
 
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -17,6 +19,8 @@ from .parser import parse_o, is_optimum
 from ..io.logsink import open_run_log
 
 HEADER_META = ["solver_tag","solver_alias","solver_cmd","instance","run_id","optimum_found","exit_code"]
+logger = logging.getLogger(__name__)
+
 
 
 def _extract_cwd(cmd_template: str) -> Tuple[Optional[str], str]:
@@ -87,26 +91,96 @@ async def run_one_streaming(
         nonlocal best_seen, optimum
         assert proc.stdout is not None
         event_idx = 0
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
+
+        READ_CHUNK = 4096
+        MAX_BUF = 10 * 1024 * 1024  # 10MB anti-stdout sans '\n'
+        buf = bytearray()
+
+        def _handle_line(line_bytes: bytes) -> None:
+            nonlocal best_seen, optimum, event_idx
+
             now = time.perf_counter() - t0
-            s = line.decode(errors="replace").strip()
-            c = parse_o(s)
-            if c is not None:
-                if best_seen is None or c < best_seen:
-                    best_seen = c
-                    traj.append(Event(now, c))  # amélioration stricte
+            s = line_bytes.decode(errors="replace").strip()
+
+            try:
+                c = parse_o(s)
+            except Exception:
+                logger.exception("parse_o crashed (run_id=%s) line=%r", run_id, s)
+                c = None
+
+            if c is not None and (best_seen is None or c < best_seen):
+                best_seen = c
+                traj.append(Event(now, c))
+
+                logger.info(
+                    "New best (run_id=%s, event_idx=%d): c=%s at t=%.6f",
+                    run_id, event_idx, c, now
+                )
+
+                try:
                     writer.writerow([
                         solver_tag, solver_alias, cmd_template,
                         str(inst_path.absolute()), run_id, event_idx, now, int(c)
                     ])
                     events_fp.flush()
                     event_idx += 1
-            if is_optimum(s):
-                optimum = True
+                except Exception:
+                    logger.exception("Failed to write/flush event row (run_id=%s)", run_id)
 
+            try:
+                if is_optimum(s):
+                    if not optimum:
+                        logger.info("Optimum detected (run_id=%s)", run_id)
+                    optimum = True
+            except Exception:
+                logger.exception("is_optimum crashed (run_id=%s) line=%r", run_id, s)
+
+        logger.debug(
+            "pump_stdout start (solver_tag=%s, alias=%s, run_id=%s, inst=%s)",
+            solver_tag, solver_alias, run_id, inst_path
+        )
+
+        try:
+            while True:
+                try:
+                    chunk = await proc.stdout.read(READ_CHUNK)
+                except Exception:
+                    logger.exception("stdout read failed (run_id=%s)", run_id)
+                    break
+
+                if not chunk:
+                    if buf:
+                        _handle_line(bytes(buf))
+                        buf.clear()
+                    logger.debug("pump_stdout EOF (run_id=%s)", run_id)
+                    break
+
+                buf.extend(chunk)
+
+                if len(buf) > MAX_BUF:
+                    logger.warning(
+                        "stdout buffer > %d bytes without newline (run_id=%s). Truncating buffer.",
+                        MAX_BUF, run_id
+                    )
+                    buf[:] = buf[-(MAX_BUF // 2):]
+
+                while True:
+                    nl = buf.find(b"\n")
+                    if nl == -1:
+                        break
+                    line_bytes = bytes(buf[:nl])
+                    del buf[:nl + 1]
+                    _handle_line(line_bytes)
+
+        except asyncio.CancelledError:
+            logger.debug("pump_stdout cancelled (run_id=%s)", run_id)
+            raise
+        except Exception:
+            logger.exception("Unhandled error in pump_stdout (run_id=%s)", run_id)
+        finally:
+            logger.debug("pump_stdout end (run_id=%s, events=%d)", run_id, event_idx)
+
+    
     pump_task = asyncio.create_task(_pump_stdout())
 
     # Timeout => SIGKILL direct (spec)

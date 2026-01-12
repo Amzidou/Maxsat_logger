@@ -213,3 +213,7 @@ runs/
 .ipynb_checkpoints/
 solvers/
 data/
+solvers.txt
+logs.tout
+.gitignore
+runner.out

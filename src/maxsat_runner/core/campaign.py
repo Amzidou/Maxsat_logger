@@ -76,10 +76,12 @@ async def run_campaign_sequential(
     all_results: List[RunResult] = []
 
     for alias, cmd in defs:
+        print(f"=== Campaign: running solver '{alias}' ===")
         for inst in insts:
             # ouvrir logs du run
             events_path, events_fp, meta_path, run_id = open_run_log(out_dir, alias, inst)
             try:
+                print(f"--- Instance: {inst.name} ---")
                 r = await run_one(
                     cmd_template=cmd,
                     inst_path=inst,
@@ -90,6 +92,7 @@ async def run_campaign_sequential(
                     run_id=run_id,
                     timeout_sec=timeout_sec,
                 )
+                print(f"--- Instance done: {inst.name} (status={r. exit_code}, cost={r.final_cost}, time to best ={r.time_to_best_sec}s) ---")
                 all_results.append(r)
             finally:
                 events_fp.close()

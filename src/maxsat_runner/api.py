@@ -158,11 +158,13 @@ def api_stats(body: Dict):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
     try:
+        print(f"=== Stats: generating reports ===")
         res = generate_basic_reports(
             runs_p, out_p, by=by, instance_basename=instance,
             t_min=t_min, t_max=t_max, t_at=t_at,
             log_time=log_time
         )
+        print(f"=== Stats: reports generated ===")
     except Exception as ex:
         return JSONResponse({"ok": False, "error": str(ex)}, status_code=400)
 

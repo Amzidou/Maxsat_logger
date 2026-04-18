@@ -7,6 +7,7 @@ import asyncio
 import pandas as pd
 
 from .core.campaign import run_campaign_sequential
+from .core.campaign import run_single_instance
 from .analytics.stats import generate_basic_reports
 from .analytics.similarities import generate_clusters
 
@@ -49,6 +50,55 @@ def cli_run(
         }, ensure_ascii=False, indent=2))
     except Exception as ex:
         typer.echo(json.dumps({"ok": False, "error": str(ex)}, ensure_ascii=False, indent=2))
+        raise typer.Exit(code=1)
+
+@app.command("run-one")
+def cli_run_one(
+    solver_alias: str = typer.Option(..., "--solver-alias", help="Alias du solveur"),
+    cmd: str = typer.Option(..., "--cmd", help="Commande du solveur, doit contenir {inst}"),
+    instance: str = typer.Option(..., "--instance", help="Chemin de l'instance"),
+    out: str = typer.Option("./runs", "--out", help="Dossier de sortie des logs"),
+    timeout_sec: Optional[int] = typer.Option(None, "--timeout-sec", help="Timeout du run (secondes)"),
+):
+    """
+    Exécute un seul run : 1 solveur x 1 instance.
+    Cette commande est adaptée à un usage sur cluster / Slurm.
+    """
+    inst_path = Path(instance)
+    out_dir = Path(out)
+
+    if not inst_path.exists():
+        typer.echo(json.dumps({
+            "ok": False,
+            "error": f"Instance introuvable: {inst_path}"
+        }, ensure_ascii=False, indent=2))
+        raise typer.Exit(code=1)
+
+    if "{inst}" not in cmd:
+        typer.echo(json.dumps({
+            "ok": False,
+            "error": "La commande du solveur doit contenir le placeholder {inst}"
+        }, ensure_ascii=False, indent=2))
+        raise typer.Exit(code=1)
+
+    try:
+        payload = asyncio.run(
+            run_single_instance(
+                solver_alias=solver_alias,
+                cmd=cmd,
+                inst_path=inst_path,
+                out_dir=out_dir,
+                timeout_sec=timeout_sec,
+            )
+        )
+
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    except Exception as ex:
+        typer.echo(json.dumps({
+            "ok": False,
+            "error": str(ex)
+        }, ensure_ascii=False, indent=2))
         raise typer.Exit(code=1)
 
 @app.command("stats")

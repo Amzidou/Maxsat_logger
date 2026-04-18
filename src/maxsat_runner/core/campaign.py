@@ -103,13 +103,58 @@ async def run_campaign_sequential(
     payload: Dict[str, Any] = {
         "trajectories_csv": str(traj_csv),
         "summary_csv": str(sum_csv),
-        "results": [
-            {
-                **{k: v for k, v in asdict(r).items() if k != "events"},
-                "events": [{"t_sec": e.t_sec, "cost": e.cost} for e in r.events],
-            }
-            for r in all_results
-        ],
+        # "results": [
+        #     {
+        #         **{k: v for k, v in asdict(r).items() if k != "events"},
+        #         "events": [{"t_sec": e.t_sec, "cost": e.cost} for e in r.events],
+        #     }
+        #     for r in all_results
+        # ],
         "results_count": len(all_results),
     }
     return payload
+
+async def run_single_instance(
+    *,
+    solver_alias: str,
+    cmd: str,
+    inst_path: Path,
+    out_dir: Path,
+    timeout_sec: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Lance un seul solveur sur une seule instance.
+    Produit les fichiers de logs standards du runner.
+    """
+    out_dir = Path(out_dir)
+    inst_path = Path(inst_path)
+
+    # ouverture des fichiers de logs pour ce run
+    events_path, events_fp, meta_path, run_id = open_run_log(out_dir, solver_alias, inst_path)
+
+    try:
+        result = await run_one(
+            cmd_template=cmd,
+            inst_path=inst_path,
+            solver_alias=solver_alias,
+            solver_tag=solver_alias,
+            events_fp=events_fp,
+            meta_path=meta_path,
+            run_id=run_id,
+            timeout_sec=timeout_sec,
+        )
+    finally:
+        events_fp.close()
+
+    return {
+        "ok": True,
+        "solver_alias": solver_alias,
+        "instance": str(inst_path),
+        "run_id": run_id,
+        "events_path": str(events_path),
+        "meta_path": str(meta_path),
+        # "result": {
+        #     **{k: v for k, v in asdict(result).items() if k != "events"},
+        #     "events": [{"t_sec": e.t_sec, "cost": e.cost} for e in result.events],
+        # },
+    }

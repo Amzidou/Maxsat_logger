@@ -354,22 +354,73 @@ def _decide_time_scale(xs: np.ndarray, log_time: bool) -> tuple[bool, bool]:
         return (False, True)  # log1p fallback
     return (True, False)      # log base10
 
+def _nice_upper_bound(x_max: float, factor: float = 4.0 / 3.0) -> float:
+    """
+    Calcule une borne droite 'propre' et lisible pour l'axe du temps.
+
+    Exemples visés :
+      - 300 -> 400
+      - 30  -> 40
+      - 3e2 -> 4e2
+    """
+    if not math.isfinite(x_max):
+        return 1.0
+    if x_max <= 0.0:
+        return 1.0
+
+    target = x_max * factor
+    exp = math.floor(math.log10(target))
+    base = 10.0 ** exp
+    mant = target / base
+
+    nice_mantissas = [1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
+    for m in nice_mantissas:
+        if mant <= m + 1e-12:
+            return m * base
+
+    return 10.0 * base
+
+
 def _apply_x_mapping(ax: plt.Axes, x_min: float, x_max: float, use_log: bool, use_log1p: bool) -> None:
-    """Applique l’échelle X + limites cohérentes."""
-    span = max(1e-12, x_max - x_min)
-    pad = max(0.03 * span, 1e-3)
+    """
+    Applique l’échelle X avec une marge à gauche et une borne droite lisible.
+
+    Objectifs :
+      - laisser une marge avant le premier point ;
+      - si on finit à 300, afficher par ex. jusqu'à 400 ;
+      - en log, si on finit à 3*10^2, afficher jusqu'à 4*10^2.
+    """
+    if not math.isfinite(x_min) or not math.isfinite(x_max):
+        return
+
+    right_raw = _nice_upper_bound(x_max, factor=4.0 / 3.0)
+
+    # Cas log classique
     if use_log:
-        left = max(1e-12, x_min)
-        right = max(left * 1.1, x_max)
+        left_raw = max(1e-12, x_min / 1.25)
+        right_raw = max(right_raw, left_raw * 1.1)
+
         ax.set_xscale("log", base=10)
-        ax.set_xlim(left - pad, right + pad + 1)
+        ax.set_xlim(left_raw, right_raw)
         ax.xaxis.set_major_locator(mtick.LogLocator(base=10))
         ax.xaxis.set_minor_locator(mtick.LogLocator(base=10, subs=np.arange(2, 10) * 0.1))
         ax.xaxis.set_minor_formatter(mtick.NullFormatter())
         ax.set_xlabel("Elapsed (sec, log)")
+        return
+
+    # Cas linéaire ou log1p
+    span = max(1e-12, x_max - x_min)
+    left_pad = max(0.03 * max(x_max, span), 1e-3)
+    left_raw = x_min - left_pad
+
+    if use_log1p:
+        # on garde une petite marge avant 0 sans casser log1p
+        left_raw = max(left_raw, -0.5)
+        ax.set_xlim(np.log1p(left_raw), np.log1p(right_raw))
+        ax.set_xlabel("log1p(Elapsed sec)")
     else:
-        ax.set_xlim(x_min - pad, x_max + pad)
-        ax.set_xlabel("log1p(Elapsed sec)" if use_log1p else "Elapsed (sec)")
+        ax.set_xlim(left_raw, right_raw)
+        ax.set_xlabel("Elapsed (sec)")
 
 def plot_trajectory_for_instance(
     df_traj: pd.DataFrame,
@@ -385,7 +436,7 @@ def plot_trajectory_for_instance(
     if sub.empty:
         return
 
-    plt.figure(figsize=(8, 4.5), dpi=150)
+    plt.figure(figsize=(16, 10), dpi=150)
     ax = plt.gca()
 
     # décidez log/log1p
@@ -467,7 +518,7 @@ def plot_scores_for_instance(
     if seg.empty:
         return
 
-    plt.figure(figsize=(8, 4.5), dpi=150)
+    plt.figure(figsize=(16, 10), dpi=150)
     ax = plt.gca()
 
     # Décision d’échelle temps à partir de toutes les abscisses disponibles

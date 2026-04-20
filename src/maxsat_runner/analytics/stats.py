@@ -43,7 +43,10 @@ def _read_all_events(logs_dir: Path) -> pd.DataFrame:
     for f in logs_dir.rglob("*_[0-9]*.csv"):
         if f.name.endswith("_meta.csv") or f.stat().st_size == 0:
             continue
-        df = pd.read_csv(f)
+        try:
+            df = pd.read_csv(f)
+        except Exception as e:
+            raise RuntimeError(f"Erreur lecture CSV dans {f}: {e}") from e
         if set(_EVENTS_HEADER).issubset(df.columns):
             # types utiles
             if "run_id" in df.columns:

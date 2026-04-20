@@ -37,18 +37,20 @@ def _savefig(png: Path) -> None:
 _EVENTS_HEADER = ["solver_tag","solver_alias","solver_cmd","instance","run_id","event_idx","elapsed_sec","cost"]
 _META_HEADER   = ["solver_tag","solver_alias","solver_cmd","instance","run_id","optimum_found","exit_code"]
 
-def _read_all_events(logs_dir: Path) -> pd.DataFrame:
-    """Lit tous les CSV d'événements (structure imbriquée supportée)."""
+def _read_all_events(logs_dir: Path) -> tuple[pd.DataFrame, List[str]]:
     parts = []
+    errors: List[str] = []
+
     for f in logs_dir.rglob("*_[0-9]*.csv"):
         if f.name.endswith("_meta.csv") or f.stat().st_size == 0:
             continue
         try:
             df = pd.read_csv(f)
-        except Exception as e:
-            raise RuntimeError(f"Erreur lecture CSV dans {f}: {e}") from e
-        if set(_EVENTS_HEADER).issubset(df.columns):
-            # types utiles
+            if not set(_EVENTS_HEADER).issubset(df.columns):
+                missing = [c for c in _EVENTS_HEADER if c not in df.columns]
+                errors.append(f"[events] {f} -> colonnes manquantes: {missing}")
+                continue
+
             if "run_id" in df.columns:
                 df["run_id"] = pd.to_numeric(df["run_id"], errors="coerce").astype("Int64")
             if "event_idx" in df.columns:
@@ -56,26 +58,39 @@ def _read_all_events(logs_dir: Path) -> pd.DataFrame:
             df["elapsed_sec"] = pd.to_numeric(df["elapsed_sec"], errors="coerce")
             df["cost"] = pd.to_numeric(df["cost"], errors="coerce")
             parts.append(df[_EVENTS_HEADER].copy())
-    if parts:
-        out = pd.concat(parts, ignore_index=True)
-        out["basename"] = out["instance"].apply(lambda p: Path(str(p)).name)
-        return out
-    return pd.DataFrame(columns=_EVENTS_HEADER + ["basename"])
+        except Exception as e:
+            errors.append(f"[events] {f} -> {type(e).__name__}: {e}")
 
-def _read_all_meta(logs_dir: Path) -> pd.DataFrame:
-    """Lit tous les CSV meta (structure imbriquée supportée)."""
+    out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=_EVENTS_HEADER)
+    if not out.empty:
+        out["basename"] = out["instance"].apply(lambda p: Path(str(p)).name)
+    else:
+        out = pd.DataFrame(columns=_EVENTS_HEADER + ["basename"])
+    return out, errors
+
+def _read_all_meta(logs_dir: Path) -> tuple[pd.DataFrame, List[str]]:
     parts = []
+    errors: List[str] = []
+
     for f in logs_dir.rglob("*_meta.csv"):
         if f.stat().st_size == 0:
             continue
-        df = pd.read_csv(f)
-        if set(_META_HEADER).issubset(df.columns):
+        try:
+            df = pd.read_csv(f)
+            if not set(_META_HEADER).issubset(df.columns):
+                missing = [c for c in _META_HEADER if c not in df.columns]
+                errors.append(f"[meta] {f} -> colonnes manquantes: {missing}")
+                continue
+
             if "run_id" in df.columns:
                 df["run_id"] = pd.to_numeric(df["run_id"], errors="coerce").astype("Int64")
             parts.append(df[_META_HEADER].copy())
-    if parts:
-        return pd.concat(parts, ignore_index=True)
-    return pd.DataFrame(columns=_META_HEADER)
+        except Exception as e:
+            errors.append(f"[meta] {f} -> {type(e).__name__}: {e}")
+
+    out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=_META_HEADER)
+    return out, errors
+
 
 def _step_cost_at_t(times: List[float], costs: List[float], t: float, idx_hint: int) -> tuple[Optional[float], int]:
     """Retourne le coût (step) à l'instant t pour une série (times,costs)."""
@@ -193,8 +208,17 @@ def _build_mean_from_logs(logs_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     - df_traj_mean : trajectoires MOYENNES (un run_id=-1 par solver×instance)
     - df_sum_mean  : summary MOYEN (une ligne par solver×instance)
     """
-    ev = _read_all_events(logs_dir)
-    meta = _read_all_meta(logs_dir)
+    ev, ev_errors = _read_all_events(logs_dir)
+    meta, meta_errors = _read_all_meta(logs_dir)
+
+    all_errors = ev_errors + meta_errors
+    if all_errors:
+        details = "\n".join(f" - {msg}" for msg in all_errors)
+        raise RuntimeError(
+            "Des fichiers de logs sont invalides.\n"
+            f"Fichiers en erreur ({len(all_errors)}):\n{details}"
+        )
+
     if ev.empty and meta.empty:
         raise FileNotFoundError(f"Aucun log dans {logs_dir}")
 
@@ -618,8 +642,16 @@ def compute_replicas_by_solver_stats(runs_dir: Path, by: str = "solver_alias") -
     if not logs_dir.exists():
         return pd.DataFrame(columns=[by,"instance","n_runs","mean_final_cost","std_final_cost"])
 
-    df_ev_all = _read_all_events(logs_dir)
-    _ = _read_all_meta(logs_dir)  # non utilisé pour l’instant
+    df_ev_all, ev_errors = _read_all_events(logs_dir)
+    meta, meta_errors = _read_all_meta(logs_dir)
+
+    all_errors = ev_errors + meta_errors
+    if all_errors:
+        details = "\n".join(f" - {msg}" for msg in all_errors)
+        raise RuntimeError(
+            "Des fichiers de logs sont invalides.\n"
+            f"Fichiers en erreur ({len(all_errors)}):\n{details}"
+        )
 
     if df_ev_all.empty:
         return pd.DataFrame(columns=[by,"instance","n_runs","mean_final_cost","std_final_cost"])

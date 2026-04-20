@@ -1,5 +1,4 @@
 from __future__ import annotations
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import math
@@ -52,6 +51,103 @@ def _clip_score(x: float) -> float:
     if x > 1.0:
         return 1.0
     return float(x)
+
+
+def _nice_upper_bound(x_max: float, factor: float = 4.0 / 3.0) -> float:
+    """
+    Calcule une borne droite 'propre' et lisible pour l'axe du temps.
+
+    Exemples visés :
+      - 300 -> 400
+      - 30  -> 40
+      - 3e2 -> 4e2
+
+    On prend d'abord une marge multiplicative, puis on arrondit
+    au prochain repère 'agréable'.
+    """
+    if not math.isfinite(x_max):
+        return 1.0
+    if x_max <= 0.0:
+        return 1.0
+
+    target = x_max * factor
+    exp = math.floor(math.log10(target))
+    base = 10.0 ** exp
+    mant = target / base
+
+    nice_mantissas = [1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
+    for m in nice_mantissas:
+        if mant <= m + 1e-12:
+            return m * base
+
+    return 10.0 * base
+
+
+def _apply_time_axis_with_right_margin(
+    ax: plt.Axes,
+    raw_x_min: Optional[float],
+    raw_x_max: Optional[float],
+    use_log: bool,
+    use_log1p: bool,
+) -> None:
+    """
+    Applique une borne gauche et droite plus lisible sur l'axe du temps.
+
+    Objectifs :
+      - laisser une marge avant le premier point ;
+      - si on finit à 300, afficher par ex. jusqu'à 400 ;
+      - en log, si on finit à 3*10^2, afficher jusqu'à 4*10^2.
+    """
+    if raw_x_min is None or raw_x_max is None:
+        return
+
+    right_raw = _nice_upper_bound(raw_x_max, factor=4.0 / 3.0)
+
+    # cas échelle log classique
+    if use_log:
+        left_raw = max(1e-12, raw_x_min / 1.25)
+        right_raw = max(right_raw, left_raw * 1.1)
+
+        ax.set_xscale("log", base=10)
+        ax.set_xlim(left_raw, right_raw)
+        ax.xaxis.set_major_locator(mtick.LogLocator(base=10))
+        ax.xaxis.set_minor_locator(mtick.LogLocator(base=10, subs=np.arange(2, 10) * 0.1))
+        ax.xaxis.set_minor_formatter(mtick.NullFormatter())
+        ax.set_xlabel("Elapsed (sec, log)")
+        return
+
+    # cas linéaire ou log1p
+    span = max(1e-12, raw_x_max - raw_x_min)
+    left_pad = max(0.03 * max(raw_x_max, span), 1e-3)
+    left_raw = raw_x_min - left_pad
+
+    if use_log1p:
+        # on autorise une petite marge avant 0,
+        # mais on reste strictement > -1 pour log1p
+        left_raw = max(left_raw, -0.5)
+        ax.set_xlim(np.log1p(left_raw), np.log1p(right_raw))
+        ax.set_xlabel("log1p(Elapsed sec)")
+    else:
+        ax.set_xlim(left_raw, right_raw)
+        ax.set_xlabel("Elapsed (sec)")
+
+def _short_solver_name(name: str) -> str:
+    """
+    Alias courts pour les tableaux / figures récapitulatives.
+    Tu peux enrichir ce mapping plus tard si besoin.
+    """
+    name = str(name)
+    mapping = {
+        "EvalMaxSAT_anytime": "EvalMaxSAT",
+        "EvalMaxSAT_anytime_withoutring": "EvalMaxSAT-noRing",
+        "SPB_Maxsat": "SPB",
+        "SPB_Maxsat_BAND": "SPB-Band",
+        "SPB_Maxsat_FPS": "SPB-FPS",
+        "tt-open-wbo-inc": "tt-open-wbo",
+        "tt_open_wbo": "tt-open-wbo",
+        "nuwls_2024": "NuWLS-2024",
+    }
+    return mapping.get(name, name)
 
 
 # ============ 1) Segments par instance ============
@@ -175,10 +271,8 @@ def _compute_time_stats_over_time(
         i0 = np.searchsorted(T, starts, side="left")
         i1 = np.searchsorted(T, ends, side="left")
 
-        # On ne garde que les segments couvrant au moins un intervalle [T[k], T[k+1])
         valid = (i0 < i1) & (i0 < n_intervals)
         if not np.any(valid):
-            # Même comportement que l'ancien code: snapshot final uniquement
             if T.size > 0:
                 pieces.append(pd.DataFrame({
                     "t": [T[-1]],
@@ -195,8 +289,6 @@ def _compute_time_stats_over_time(
         instances = instances[valid]
         scores = scores[valid]
 
-        # events[idx] = list[(kind, instance, score)]
-        # kind: 0 = remove, 1 = add
         events: List[List[Tuple[int, str, float]]] = [[] for _ in range(n_intervals)]
         for start_idx, end_idx, inst, sc in zip(i0, i1, instances, scores):
             if 0 <= start_idx < n_intervals:
@@ -209,7 +301,6 @@ def _compute_time_stats_over_time(
         max_arr = np.full(n_intervals, np.nan, dtype=float)
         cnt_arr = np.zeros(n_intervals, dtype=np.int64)
 
-        # Active set
         active: Dict[str, Tuple[float, int]] = {}
         versions: Dict[str, int] = {}
         min_heap: List[Tuple[float, str, int]] = []
@@ -263,7 +354,6 @@ def _compute_time_stats_over_time(
                 heapq.heappop(max_heap)
 
         for k in range(n_intervals):
-            # remove avant add pour respecter [t_start, t_end)
             if events[k]:
                 for kind, inst, sc in events[k]:
                     if kind == 0:
@@ -345,7 +435,184 @@ def compute_score_distribution_over_time(
     return _compute_time_stats_over_time(segments_df, by=by)
 
 
-# ============ 4) Plot + CSV + Driver ============
+# ============ 4) Métriques globales type AUC ============
+
+def _prepare_auc_curve(
+    ts_df: pd.DataFrame,
+    solver_value,
+    by: str = "solver_alias",
+) -> pd.DataFrame:
+    """Prépare une courbe propre, triée, sans doublons, pour un solveur."""
+    g = ts_df[ts_df[by] == solver_value].copy()
+    if g.empty:
+        return pd.DataFrame(columns=["t", "avg_score"])
+
+    g["t"] = pd.to_numeric(g["t"], errors="coerce")
+    g["avg_score"] = pd.to_numeric(g["avg_score"], errors="coerce")
+    g = g.dropna(subset=["t", "avg_score"]).sort_values("t")
+
+    g = g.drop_duplicates(subset=["t"], keep="last")
+
+    if g.empty:
+        return pd.DataFrame(columns=["t", "avg_score"])
+
+    g["avg_score"] = g["avg_score"].map(_clip_score)
+    return g[["t", "avg_score"]].reset_index(drop=True)
+
+
+def _step_auc_linear(t: np.ndarray, y: np.ndarray) -> float:
+    """
+    Aire exacte pour une courbe step-post :
+    y[i] est la valeur sur [t[i], t[i+1]).
+    """
+    if t.size < 2:
+        return float("nan")
+
+    dt = np.diff(t)
+    if np.any(dt < 0):
+        return float("nan")
+
+    return float(np.sum(y[:-1] * dt))
+
+
+def _step_auc_log(t: np.ndarray, y: np.ndarray) -> float:
+    """
+    Aire exacte pour une courbe step-post intégrée par rapport à ln(t) :
+    ∫ y(t) d ln(t), uniquement sur les temps strictement positifs.
+    """
+    mask = t > 0.0
+    t_pos = t[mask]
+    y_pos = y[mask]
+
+    if t_pos.size < 2:
+        return float("nan")
+
+    u = np.log(t_pos)
+    du = np.diff(u)
+    if np.any(du < 0):
+        return float("nan")
+
+    return float(np.sum(y_pos[:-1] * du))
+
+
+def compute_auc_scores(
+    ts_df: pd.DataFrame,
+    by: str = "solver_alias",
+) -> pd.DataFrame:
+    """
+    Calcule, pour chaque solveur :
+      - auc_linear : aire brute sous la courbe sur l'axe temps linéaire
+      - sdt        : aire normalisée par la durée totale
+      - auc_log    : aire brute sous la courbe sur l'axe ln(t)
+      - sdt_log    : aire normalisée par l'étendue ln(t_max)-ln(t_min)
+
+    sdt = score de domination temporelle
+    sdt_log = version logarithmique
+    """
+    if ts_df.empty:
+        return pd.DataFrame(columns=[by, "auc_linear", "sdt", "auc_log", "sdt_log"])
+
+    solver_values = sorted(ts_df[by].dropna().unique(), key=lambda x: str(x))
+    rows: List[Dict[str, object]] = []
+
+    for solver_value in solver_values:
+        g = _prepare_auc_curve(ts_df, solver_value, by=by)
+        if g.empty:
+            continue
+
+        t = g["t"].to_numpy(dtype=float)
+        y = g["avg_score"].to_numpy(dtype=float)
+
+        auc_linear = float("nan")
+        sdt = float("nan")
+        auc_log = float("nan")
+        sdt_log = float("nan")
+
+        if t.size >= 2 and t[-1] > t[0]:
+            auc_linear = _step_auc_linear(t, y)
+            if math.isfinite(auc_linear):
+                sdt = float(auc_linear / (t[-1] - t[0]))
+
+        mask = t > 0.0
+        if np.count_nonzero(mask) >= 2:
+            t_pos = t[mask]
+            auc_log = _step_auc_log(t, y)
+            if math.isfinite(auc_log):
+                log_span = float(np.log(t_pos[-1]) - np.log(t_pos[0]))
+                if log_span > 0:
+                    sdt_log = float(auc_log / log_span)
+
+        rows.append({
+            by: solver_value,
+            "auc_linear": auc_linear,
+            "sdt": sdt,
+            "auc_log": auc_log,
+            "sdt_log": sdt_log,
+        })
+
+    out = pd.DataFrame(rows, columns=[by, "auc_linear", "sdt", "auc_log", "sdt_log"])
+    if out.empty:
+        return out
+
+    return out.sort_values(["sdt", "sdt_log"], ascending=[False, False]).reset_index(drop=True)
+
+
+def save_auc_scores_csv(auc_df: pd.DataFrame, out_csv: Path) -> None:
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    auc_df.to_csv(out_csv, index=False)
+
+
+def plot_auc_scores_table(
+    auc_df: pd.DataFrame,
+    out_png: Path,
+    by: str = "solver_alias",
+) -> None:
+    """
+    Figure séparée contenant uniquement le tableau des métriques AUC / SDT.
+    Affichage à 5 chiffres après la virgule.
+    """
+    if auc_df.empty:
+        return
+
+    disp = auc_df.copy()
+    disp[by] = disp[by].map(lambda x: _short_solver_name(str(x)))
+
+    disp = disp.rename(columns={
+        by: "Solver",
+        "auc_linear": "AUC",
+        "sdt": "SDT",
+        "auc_log": "AUC-log",
+        "sdt_log": "SDT-log",
+    })
+
+    for col in ["AUC", "SDT", "AUC-log", "SDT-log"]:
+        disp[col] = disp[col].map(lambda x: f"{x:.5f}" if pd.notna(x) else "NA")
+
+    n_rows = len(disp)
+    fig_height = max(2.8, 0.55 * (n_rows + 1))
+
+    fig, ax = plt.subplots(figsize=(10.5, fig_height), dpi=150)
+    ax.axis("off")
+    ax.set_title("Temporal domination metrics (AUC / SDT)", fontsize=13, pad=12)
+
+    table = ax.table(
+        cellText=disp.values.tolist(),
+        colLabels=list(disp.columns),
+        cellLoc="center",
+        loc="center",
+        bbox=[0.02, 0.00, 0.96, 0.90],
+    )
+
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1.0, 1.25)
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_png, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ============ 5) Plot + CSV + Driver ============
 
 def plot_avg_scores_over_time(
     ts_df: pd.DataFrame,
@@ -356,7 +623,7 @@ def plot_avg_scores_over_time(
     if ts_df.empty:
         return
 
-    plt.figure(figsize=(12, 10), dpi=150)
+    plt.figure(figsize=(16, 10), dpi=150)
     ax = plt.gca()
 
     xs_all = ts_df.loc[~ts_df["avg_score"].isna(), "t"].astype(float).to_numpy()
@@ -368,7 +635,8 @@ def plot_avg_scores_over_time(
         else:
             use_log = True
 
-    x_min = x_max = None
+    raw_x_min = None
+    raw_x_max = None
 
     def xmap(x: np.ndarray) -> np.ndarray:
         if use_log1p:
@@ -380,14 +648,14 @@ def plot_avg_scores_over_time(
         g = g[~g["avg_score"].isna()]
         if g.empty:
             continue
+
         xs = g["t"].astype(float).to_numpy()
         ys = g["avg_score"].astype(float).to_numpy()
 
-        xs_plot = xmap(xs)
-        lxmin, lxmax = float(xs_plot.min()), float(xs_plot.max())
-        x_min = lxmin if x_min is None else min(x_min, lxmin)
-        x_max = lxmax if x_max is None else max(x_max, lxmax)
+        raw_x_min = float(xs.min()) if raw_x_min is None else min(raw_x_min, float(xs.min()))
+        raw_x_max = float(xs.max()) if raw_x_max is None else max(raw_x_max, float(xs.max()))
 
+        xs_plot = xmap(xs)
         line, = ax.step(xs_plot, ys, where="post", linewidth=1.0, label=str(s))
         color = line.get_color()
         ax.plot(xs_plot, ys, ".", linewidth=0, color=color)
@@ -421,7 +689,7 @@ def plot_avg_scores_over_time(
         out[mask_low] = z[mask_low] * (MARGIN / 0.1)
 
         mask_high = (z > 1.0)
-        out[mask_high] = 1.0 + (z[mask_high] - 1.0) * (MARGIN / 0.1)
+        out[mask_high] = 1.0 + (z[mask_high] - 1.0) * (0.1 / MARGIN)
 
         return out
 
@@ -433,21 +701,13 @@ def plot_avg_scores_over_time(
     ax.grid(True, which="both", alpha=0.25)
     ax.set_ylabel("Average relative score (best/cost)")
 
-    if x_min is not None and x_max is not None:
-        span = max(1e-12, x_max - x_min)
-        pad = max(0.03 * span, 1e-3)
-        if use_log:
-            left = max(1e-12, x_min)
-            right = max(left * 1.1, x_max)
-            ax.set_xscale("log", base=10)
-            ax.set_xlim(left - pad, right + pad + 10)
-            ax.xaxis.set_major_locator(mtick.LogLocator(base=10))
-            ax.xaxis.set_minor_locator(mtick.LogLocator(base=10, subs=np.arange(2, 10) * 0.1))
-            ax.xaxis.set_minor_formatter(mtick.NullFormatter())
-            ax.set_xlabel("Elapsed (sec, log)")
-        else:
-            ax.set_xlim(x_min - pad, x_max + pad)
-            ax.set_xlabel("log1p(Elapsed sec)" if use_log1p else "Elapsed (sec)")
+    _apply_time_axis_with_right_margin(
+        ax=ax,
+        raw_x_min=raw_x_min,
+        raw_x_max=raw_x_max,
+        use_log=use_log,
+        use_log1p=use_log1p,
+    )
 
     ax.set_title("Average scores over time (per solver)")
     _legend_bottom()
@@ -459,7 +719,7 @@ def save_avg_scores_csv(ts_df: pd.DataFrame, out_csv: Path) -> None:
     ts_df.to_csv(out_csv, index=False)
 
 
-# ============ 5) Plot distribution (mean + min–max) ============
+# ============ 6) Plot distribution (mean + min–max) ============
 
 def plot_score_distribution_over_time(
     dist_df: pd.DataFrame,
@@ -470,7 +730,7 @@ def plot_score_distribution_over_time(
     if dist_df.empty:
         return
 
-    plt.figure(figsize=(12, 10), dpi=150)
+    plt.figure(figsize=(16, 10), dpi=150)
     ax = plt.gca()
 
     xs_all = dist_df.loc[~dist_df["mean"].isna(), "t"].astype(float).to_numpy()
@@ -482,7 +742,8 @@ def plot_score_distribution_over_time(
         else:
             use_log = True
 
-    x_min = x_max = None
+    raw_x_min = None
+    raw_x_max = None
 
     def xmap(x: np.ndarray) -> np.ndarray:
         return np.log1p(x) if use_log1p else x
@@ -498,11 +759,10 @@ def plot_score_distribution_over_time(
         vmin = g["min"].astype(float).to_numpy()
         vmax = g["max"].astype(float).to_numpy()
 
-        xs_plot = xmap(xs)
-        lxmin, lxmax = float(xs_plot.min()), float(xs_plot.max())
-        x_min = lxmin if x_min is None else min(x_min, lxmin)
-        x_max = lxmax if x_max is None else max(x_max, lxmax)
+        raw_x_min = float(xs.min()) if raw_x_min is None else min(raw_x_min, float(xs.min()))
+        raw_x_max = float(xs.max()) if raw_x_max is None else max(raw_x_max, float(xs.max()))
 
+        xs_plot = xmap(xs)
         valid_band = ~(np.isnan(vmin) | np.isnan(vmax))
 
         line, = ax.step(xs_plot, mean, where="post", linewidth=1.0, label=str(s))
@@ -550,7 +810,7 @@ def plot_score_distribution_over_time(
         mask_low = (z < 0.0)
         out[mask_low] = z[mask_low] * (MARGIN / 0.1)
         mask_high = (z > 1.0)
-        out[mask_high] = 1.0 + (z[mask_high] - 1.0) * (MARGIN / 0.1)
+        out[mask_high] = 1.0 + (z[mask_high] - 1.0) * (0.1 / MARGIN)
         return out
 
     ax.set_yscale("function", functions=(y_forward, y_inverse))
@@ -560,21 +820,13 @@ def plot_score_distribution_over_time(
     ax.grid(True, which="both", alpha=0.25)
     ax.set_ylabel("Relative score (mean with min–max band)")
 
-    if x_min is not None and x_max is not None:
-        span = max(1e-12, x_max - x_min)
-        pad = max(0.03 * span, 1e-3)
-        if use_log:
-            left = max(1e-12, x_min)
-            right = max(left * 1.1, x_max)
-            ax.set_xscale("log", base=10)
-            ax.set_xlim(left - pad, right + pad + 1)
-            ax.xaxis.set_major_locator(mtick.LogLocator(base=10))
-            ax.xaxis.set_minor_locator(mtick.LogLocator(base=10, subs=np.arange(2, 10) * 0.1))
-            ax.xaxis.set_minor_formatter(mtick.NullFormatter())
-            ax.set_xlabel("Elapsed (sec, log)")
-        else:
-            ax.set_xlim(x_min - pad, x_max + pad)
-            ax.set_xlabel("log1p(Elapsed sec)" if use_log1p else "Elapsed (sec)")
+    _apply_time_axis_with_right_margin(
+        ax=ax,
+        raw_x_min=raw_x_min,
+        raw_x_max=raw_x_max,
+        use_log=use_log,
+        use_log1p=use_log1p,
+    )
 
     ax.set_title("Score range over time (per solver) — mean ± [min,max]")
     _legend_bottom()
@@ -586,7 +838,7 @@ def save_score_distribution_csv(dist_df: pd.DataFrame, out_csv: Path) -> None:
     dist_df.to_csv(out_csv, index=False)
 
 
-# ============ 6) Driver ============
+# ============ 7) Driver ============
 
 def generate_final_score_summary(
     df_traj: pd.DataFrame,
@@ -597,17 +849,15 @@ def generate_final_score_summary(
     log_time: bool = False,
 ) -> Dict[str, str]:
     """
-    Pipeline: segments → stats → CSV+PNG.
+    Pipeline: segments → stats → CSV+PNG + métriques AUC/SDT.
     """
     seg = collect_instance_segments(df_traj, by=by, t_min=t_min, t_max=t_max)
     print("...instance segments collected...")
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Une seule passe lourde
     dist = compute_score_distribution_over_time(seg, by=by)
     print("...compute score distribution over time...")
-    
 
     ts = (
         dist[["t", by, "mean", "n_instances"]]
@@ -615,11 +865,20 @@ def generate_final_score_summary(
         .reset_index(drop=True)
     )
 
+    # Figure principale inchangée
     out_csv = out_dir / "average_scores_over_time.csv"
     out_png = out_dir / "average_scores_over_time.png"
     save_avg_scores_csv(ts, out_csv)
     plot_avg_scores_over_time(ts, out_png, by=by, log_time=log_time)
 
+    # Nouvelles métriques globales séparées
+    auc_df = compute_auc_scores(ts, by=by)
+    auc_csv = out_dir / "auc_scores_over_time.csv"
+    auc_png = out_dir / "auc_scores_over_time.png"
+    save_auc_scores_csv(auc_df, auc_csv)
+    plot_auc_scores_table(auc_df, auc_png, by=by)
+
+    # Distribution des scores
     dist_csv = out_dir / "score_distribution_over_time.csv"
     dist_png = out_dir / "score_distribution_over_time.png"
     save_score_distribution_csv(dist, dist_csv)
@@ -628,6 +887,8 @@ def generate_final_score_summary(
     return {
         "avg_scores_csv": str(out_csv),
         "avg_scores_png": str(out_png),
+        "auc_scores_csv": str(auc_csv),
+        "auc_scores_png": str(auc_png),
         "score_dist_csv": str(dist_csv),
         "score_dist_png": str(dist_png),
     }

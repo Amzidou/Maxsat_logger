@@ -294,6 +294,65 @@ def load_runs(runs_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
             raise ValueError("Colonnes requises manquantes (solver_cmd / instance).")
     return df_traj, df_sum
 
+# ===================== helpers =====================
+
+def _resolve_common_time_window(
+    df_traj: pd.DataFrame,
+    t_min: Optional[float] = None,
+    t_max: Optional[float] = None,
+) -> Tuple[float, float]:
+    """
+    Résout une fenêtre temporelle commune à tout le dataset.
+    Si t_min / t_max sont fournis, ils priment.
+    Sinon on utilise min/max globaux de elapsed_sec.
+    """
+    if "elapsed_sec" not in df_traj.columns:
+        raise KeyError("La colonne 'elapsed_sec' est requise dans df_traj.")
+
+    times = pd.to_numeric(df_traj["elapsed_sec"], errors="coerce")
+    times = times[np.isfinite(times.to_numpy(dtype=float))]
+    if times.empty:
+        raise ValueError("Impossible de résoudre l'horizon global: aucun elapsed_sec valide.")
+
+    global_min = float(times.min())
+    global_max = float(times.max())
+
+    lo = global_min if t_min is None else float(t_min)
+    hi = global_max if t_max is None else float(t_max)
+
+    if hi <= lo:
+        raise ValueError(f"Fenêtre temporelle invalide: t_min={lo}, t_max={hi}.")
+
+    return lo, hi
+
+
+def _duration_weighted_mean_scores(seg: pd.DataFrame) -> pd.Series:
+    """
+    Moyenne temporelle pondérée par la durée pour chaque solveur.
+
+    Important :
+      - un score NaN signifie "pas encore de valeur"
+      - ces segments ne participent pas à la moyenne
+    """
+    g = seg.copy()
+    g["duration"] = pd.to_numeric(g["duration"], errors="coerce").fillna(0.0)
+    g["score"] = pd.to_numeric(g["score"], errors="coerce")
+
+    # ne garder que les segments qui ont une vraie valeur ET une durée positive
+    g = g[g["duration"] > 0].copy()
+    g = g[g["score"].notna()].copy()
+
+    if g.empty:
+        return pd.Series(dtype=float)
+
+    grouped = g.groupby("solver", observed=True)
+    num = grouped.apply(lambda x: float((x["score"] * x["duration"]).sum()))
+    den = grouped["duration"].sum()
+
+    out = num / den
+    out.name = "score_time_weighted"
+    return out
+
 # ===================== Leaderboards simples =====================
 
 def compute_leaderboard(df_sum: pd.DataFrame, by: str = "solver_alias") -> pd.DataFrame:
@@ -648,37 +707,60 @@ def aggregate_relative_leaderboard(
     wins_snapshot: Dict[str, int] = {}
 
     for inst in instances:
-        seg = compute_relative_scores_timewindow_for_instance(df_traj, inst, by=by, t_min=t_min, t_max=t_max)
+        seg = compute_relative_scores_timewindow_for_instance(
+            df_traj,
+            inst,
+            by=by,
+            t_min=t_min,
+            t_max=t_max,
+        )
         if seg.empty:
             continue
-        g2 = seg.copy()
-        g2["score"] = g2["score"].fillna(0.0)
-        m = g2.groupby("solver", observed=True)["score"].mean()
-        for k, v in m.items():
-            per_solver_scores.setdefault(k, []).append(float(v))
+
+        seg = seg.copy()
+        seg["score"] = pd.to_numeric(seg["score"], errors="coerce").fillna(0.0)
+        seg["duration"] = pd.to_numeric(seg["duration"], errors="coerce").fillna(0.0)
+
+        # moyenne TEMPORELLE pondérée par durée, sur les seuls segments définis
+        m = _duration_weighted_mean_scores(seg)
+        for solver_name, score_value in m.items():
+            per_solver_scores.setdefault(str(solver_name), []).append(float(score_value))
 
         if t_at is not None:
-            S = seg[["solver","t_start","t_end","cost"]]
+            S = seg[["solver", "t_start", "t_end", "cost"]].copy()
             snap = S[(S["t_start"] <= t_at) & (t_at < S["t_end"])]
+
+            # si t_at tombe exactement au bord final, on prend le dernier segment connu
             if snap.empty:
-                snap = S.sort_values(["solver","t_end"]).groupby("solver").tail(1)
-            costs_map = {row.solver: (None if pd.isna(row.cost) else int(row.cost)) for row in snap.itertuples()}
+                snap = S.sort_values(["solver", "t_end"]).groupby("solver").tail(1)
+
+            costs_map = {
+                row.solver: (None if pd.isna(row.cost) else int(row.cost))
+                for row in snap.itertuples()
+            }
             finite = [c for c in costs_map.values() if c is not None]
             if finite:
-                b = min(finite)
-                for s, c in costs_map.items():
-                    if c is not None and c == b:
-                        wins_snapshot[s] = wins_snapshot.get(s, 0) + 1
+                best_cost = min(finite)
+                for solver_name, c in costs_map.items():
+                    if c is not None and c == best_cost:
+                        wins_snapshot[solver_name] = wins_snapshot.get(solver_name, 0) + 1
 
     rows = [{
-        by: s,
+        by: solver_name,
         "instances_covered": len(vals),
-        "score_time_weighted": sum(vals)/len(vals) if vals else 0.0,
-        "wins_snapshot": wins_snapshot.get(s, 0) if t_at is not None else None
-    } for s, vals in per_solver_scores.items()]
+        "score_time_weighted": (sum(vals) / len(vals)) if vals else 0.0,
+        "wins_snapshot": wins_snapshot.get(solver_name, 0) if t_at is not None else None,
+    } for solver_name, vals in per_solver_scores.items()]
+
     out = pd.DataFrame(rows)
     if not out.empty:
-        out = out.sort_values(["score_time_weighted"], ascending=False)
+        sort_cols = ["score_time_weighted"]
+        asc = [False]
+        if t_at is not None and "wins_snapshot" in out.columns:
+            sort_cols = ["score_time_weighted", "wins_snapshot"]
+            asc = [False, False]
+        out = out.sort_values(sort_cols, ascending=asc).reset_index(drop=True)
+
     return out
 
 # ===================== Réplicas **par solveur** =====================
@@ -770,53 +852,92 @@ def generate_basic_reports(
     t_min: Optional[float] = None,
     t_max: Optional[float] = None,
     t_at: Optional[float] = None,
-    log_time: bool = False
+    log_time: bool = False,
+    min_n_instances: Optional[int] = None,
 ) -> dict:
     """
     - (Re)build trajectories/summary (moyenne par solver×instance)
     - Leaderboards (classique + relatif)
-    - Trajectoires coût/temps (par instance) — couleurs cohérentes et log/log1p auto
-    - Scores(t) par instance — idem
-    - Average scores over time — géré dans final_stats avec étirement Y près de 1
-    - Réplicas par solveur (CSV + PNG)
+    - Trajectoires coût/temps (par instance)
+    - Scores(t) par instance
+    - Average scores over time
+    - Réplicas par solveur
+
+    Important :
+      - on résout ici une fenêtre temporelle commune ;
+      - cette fenêtre est propagée partout dans le pipeline.
     """
     print(f"=== Génération des rapports basiques dans {out_dir} ===")
+
     # 1) rebuild (moyennes)
     print("Chargement des runs et (re)construction des moyennes...")
     df_traj, df_sum = load_runs(runs_dir)
 
-    # 2) Leaderboard simple
+    # 2) résolution d'un horizon commun
+    common_t_min, common_t_max = _resolve_common_time_window(
+        df_traj,
+        t_min=t_min,
+        t_max=t_max,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 3) Leaderboard simple
     print("Génération du leaderboard simple...")
     lb = compute_leaderboard(df_sum, by=by)
-    out_dir.mkdir(parents=True, exist_ok=True)
     lb_csv = out_dir / "leaderboard.csv"
     lb.to_csv(lb_csv, index=False)
     plot_leaderboard_wins(lb, out_dir / "plot_leaderboard_wins.png", by=by)
     plot_time_to_best_box(df_sum, out_dir / "plot_time_to_best_box.png", by=by)
 
-    # 3) Leaderboard relatif (fenêtre temporelle)
+    # 4) Leaderboard relatif (fenêtre temporelle commune)
     print("Génération du leaderboard relatif...")
-    lb_rel = aggregate_relative_leaderboard(df_traj, by=by, t_min=t_min, t_max=t_max, t_at=t_at)
+    lb_rel = aggregate_relative_leaderboard(
+        df_traj,
+        by=by,
+        t_min=common_t_min,
+        t_max=common_t_max,
+        t_at=t_at,
+    )
     lb_rel_csv = out_dir / "leaderboard_relative.csv"
     lb_rel.to_csv(lb_rel_csv, index=False)
 
-    # 4) Trajectoires coût/temps
+    # 5) Trajectoires coût/temps
     print("Génération des trajectoires coût/temps par instance...")
     traj_png = None
     if instance_basename:
         traj_png = out_dir / f"plot_trajectory_{instance_basename}.png"
         plot_trajectory_for_instance(df_traj, instance_basename, traj_png, by=by, log_time=log_time)
-    instance_cost_plots = plot_all_instances(df_traj, out_dir, by=by, log_time=log_time) if per_instance else []
 
-    # 5) Scores(t) par instance
+    instance_cost_plots = (
+        plot_all_instances(df_traj, out_dir, by=by, log_time=log_time)
+        if per_instance else []
+    )
+
+    # 6) Scores(t) par instance avec horizon commun
     print("Génération des scores(t) par instance...")
-    instance_score_plots = plot_all_instances_scores(df_traj, out_dir, by=by, t_min=t_min, t_max=t_max, log_time=log_time)
+    instance_score_plots = plot_all_instances_scores(
+        df_traj,
+        out_dir,
+        by=by,
+        t_min=common_t_min,
+        t_max=common_t_max,
+        log_time=log_time,
+    )
 
-    # 6) Moyennes temporelles globales (dans final_stats) — inclut la logique d’échelle X et Y
+    # 7) Stats finales temporelles avec le même horizon commun
     print("Génération des statistiques finales temporelles...")
-    finals = generate_final_score_summary(df_traj, out_dir=out_dir, by=by, t_min=t_min, t_max=t_max, log_time=log_time)
+    finals = generate_final_score_summary(
+        df_traj,
+        out_dir=out_dir,
+        by=by,
+        t_min=common_t_min,
+        t_max=common_t_max,
+        log_time=log_time,
+        min_n_instances=min_n_instances,
+    )
 
-    # 7) Réplicas **par solveur**
+    # 8) Réplicas par solveur
     print("Génération des statistiques de réplicas par solveur...")
     df_rep_solver = compute_replicas_by_solver_stats(runs_dir, by=by)
     rep_csv = out_dir / "replicas_by_solver.csv"
@@ -831,7 +952,9 @@ def generate_basic_reports(
         "instance_plots": instance_cost_plots,
         "leaderboard_relative_csv": str(lb_rel_csv),
         "instance_score_plots": instance_score_plots,
-        "t_min": t_min, "t_max": t_max, "t_at": t_at,
+        "t_min": common_t_min,
+        "t_max": common_t_max,
+        "t_at": t_at,
         **finals,
         "replicas_by_solver_csv": str(rep_csv),
         "replicas_by_solver_plots": rep_solver_plots,

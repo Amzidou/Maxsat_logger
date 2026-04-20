@@ -61,9 +61,6 @@ def _nice_upper_bound(x_max: float, factor: float = 4.0 / 3.0) -> float:
       - 300 -> 400
       - 30  -> 40
       - 3e2 -> 4e2
-
-    On prend d'abord une marge multiplicative, puis on arrondit
-    au prochain repère 'agréable'.
     """
     if not math.isfinite(x_max):
         return 1.0
@@ -122,8 +119,6 @@ def _apply_time_axis_with_right_margin(
     left_raw = raw_x_min - left_pad
 
     if use_log1p:
-        # on autorise une petite marge avant 0,
-        # mais on reste strictement > -1 pour log1p
         left_raw = max(left_raw, -0.5)
         ax.set_xlim(np.log1p(left_raw), np.log1p(right_raw))
         ax.set_xlabel("log1p(Elapsed sec)")
@@ -134,7 +129,6 @@ def _apply_time_axis_with_right_margin(
 def _short_solver_name(name: str) -> str:
     """
     Alias courts pour les tableaux / figures récapitulatives.
-    Tu peux enrichir ce mapping plus tard si besoin.
     """
     name = str(name)
     mapping = {
@@ -150,6 +144,36 @@ def _short_solver_name(name: str) -> str:
     return mapping.get(name, name)
 
 
+def _resolve_common_time_window(
+    df_traj: pd.DataFrame,
+    t_min: Optional[float] = None,
+    t_max: Optional[float] = None,
+) -> Tuple[float, float]:
+    """
+    Résout une fenêtre temporelle commune à tout le dataset.
+    Si t_min / t_max sont fournis, ils priment.
+    Sinon on utilise min/max globaux de elapsed_sec.
+    """
+    if "elapsed_sec" not in df_traj.columns:
+        raise KeyError("La colonne 'elapsed_sec' est requise dans df_traj.")
+
+    times = pd.to_numeric(df_traj["elapsed_sec"], errors="coerce")
+    times = times[np.isfinite(times.to_numpy(dtype=float))]
+    if times.empty:
+        raise ValueError("Impossible de résoudre l'horizon global: aucun elapsed_sec valide.")
+
+    global_min = float(times.min())
+    global_max = float(times.max())
+
+    lo = global_min if t_min is None else float(t_min)
+    hi = global_max if t_max is None else float(t_max)
+
+    if hi <= lo:
+        raise ValueError(f"Fenêtre temporelle invalide: t_min={lo}, t_max={hi}.")
+
+    return lo, hi
+
+
 # ============ 1) Segments par instance ============
 
 def collect_instance_segments(
@@ -158,7 +182,10 @@ def collect_instance_segments(
     t_min: Optional[float] = None,
     t_max: Optional[float] = None,
 ) -> pd.DataFrame:
-    """Concatène les segments score(t) de toutes les instances."""
+    """
+    Concatène les segments score(t) de toutes les instances sur une
+    fenêtre temporelle commune [t_min, t_max].
+    """
     df = df_traj.copy()
     df["basename"] = _basename_series(df["instance"])
     instances = sorted(df["basename"].unique())
@@ -186,7 +213,7 @@ def collect_instance_segments(
 # ============ 2) Grille temporelle globale ============
 
 def build_time_grid(segments_df: pd.DataFrame) -> List[float]:
-    """Union triée des bornes t_start/t_end sur toutes instances (dé-doublonnée)."""
+    """Union triée des bornes t_start/t_end sur toutes les instances."""
     if segments_df.empty:
         return []
 
@@ -214,12 +241,11 @@ def build_time_grid(segments_df: pd.DataFrame) -> List[float]:
 def _compute_time_stats_over_time(
     segments_df: pd.DataFrame,
     by: str = "solver_alias",
+    min_n_instances: Optional[int] = None,
 ) -> pd.DataFrame:
     """
-    Retourne un DataFrame long avec colonnes:
+    Retourne un DataFrame long avec colonnes :
     ['t', by, 'mean', 'min', 'max', 'n_instances'].
-
-    Une seule passe par solver avec sweep d'événements.
     """
     if segments_df.empty:
         return pd.DataFrame(columns=["t", by, "mean", "min", "max", "n_instances"])
@@ -257,7 +283,7 @@ def _compute_time_stats_over_time(
         return pd.DataFrame(columns=["t", by, "mean", "min", "max", "n_instances"])
 
     n_intervals = T.size - 1
-    if n_intervals < 0:
+    if n_intervals <= 0:
         return pd.DataFrame(columns=["t", by, "mean", "min", "max", "n_instances"])
 
     pieces: List[pd.DataFrame] = []
@@ -273,15 +299,6 @@ def _compute_time_stats_over_time(
 
         valid = (i0 < i1) & (i0 < n_intervals)
         if not np.any(valid):
-            if T.size > 0:
-                pieces.append(pd.DataFrame({
-                    "t": [T[-1]],
-                    by: [label],
-                    "mean": [float("nan")],
-                    "min": [float("nan")],
-                    "max": [float("nan")],
-                    "n_instances": [None],
-                }))
             continue
 
         i0 = i0[valid]
@@ -374,25 +391,38 @@ def _compute_time_stats_over_time(
                 if max_heap:
                     max_arr[k] = -max_heap[0][0]
 
-        last_mean = mean_arr[np.isfinite(mean_arr)][-1] if np.isfinite(mean_arr).any() else float("nan")
+        if min_n_instances is not None:
+            mask_low = cnt_arr < int(min_n_instances)
+            mean_arr[mask_low] = np.nan
+            min_arr[mask_low] = np.nan
+            max_arr[mask_low] = np.nan
 
-        if n_intervals > 0:
-            pieces.append(pd.DataFrame({
-                "t": T[:-1],
-                by: label,
-                "mean": mean_arr,
-                "min": min_arr,
-                "max": max_arr,
-                "n_instances": cnt_arr,
-            }))
+        finite_mean = np.isfinite(mean_arr)
+        finite_min = np.isfinite(min_arr)
+        finite_max = np.isfinite(max_arr)
+        positive_cnt = cnt_arr > 0
+
+        last_mean = mean_arr[finite_mean][-1] if finite_mean.any() else float("nan")
+        last_min = min_arr[finite_min][-1] if finite_min.any() else float("nan")
+        last_max = max_arr[finite_max][-1] if finite_max.any() else float("nan")
+        last_cnt = int(cnt_arr[positive_cnt][-1]) if positive_cnt.any() else 0
+
+        pieces.append(pd.DataFrame({
+            "t": T[:-1],
+            by: label,
+            "mean": mean_arr,
+            "min": min_arr,
+            "max": max_arr,
+            "n_instances": cnt_arr,
+        }))
 
         pieces.append(pd.DataFrame({
             "t": [T[-1]],
             by: [label],
             "mean": [last_mean],
-            "min": [float("nan")],
-            "max": [float("nan")],
-            "n_instances": [None],
+            "min": [last_min],
+            "max": [last_max],
+            "n_instances": [last_cnt],
         }))
 
     if not pieces:
@@ -408,12 +438,16 @@ def _compute_time_stats_over_time(
 def compute_avg_scores_over_time(
     segments_df: pd.DataFrame,
     by: str = "solver_alias",
+    min_n_instances: Optional[int] = None,
 ) -> pd.DataFrame:
     """
-    DataFrame long: colonnes ['t', by, 'avg_score', 'n_instances'].
-    À chaque t de la grille globale, moyenne du score par solver sur les instances couvrantes.
+    DataFrame long : ['t', by, 'avg_score', 'n_instances'].
     """
-    stats = _compute_time_stats_over_time(segments_df, by=by)
+    stats = _compute_time_stats_over_time(
+        segments_df,
+        by=by,
+        min_n_instances=min_n_instances,
+    )
     if stats.empty:
         return pd.DataFrame(columns=["t", by, "avg_score", "n_instances"])
 
@@ -427,12 +461,16 @@ def compute_avg_scores_over_time(
 def compute_score_distribution_over_time(
     segments_df: pd.DataFrame,
     by: str = "solver_alias",
+    min_n_instances: Optional[int] = None,
 ) -> pd.DataFrame:
     """
-    DataFrame long: colonnes
-    ['t', by, 'mean', 'min', 'max', 'n_instances'].
+    DataFrame long : ['t', by, 'mean', 'min', 'max', 'n_instances'].
     """
-    return _compute_time_stats_over_time(segments_df, by=by)
+    return _compute_time_stats_over_time(
+        segments_df,
+        by=by,
+        min_n_instances=min_n_instances,
+    )
 
 
 # ============ 4) Métriques globales type AUC ============
@@ -450,7 +488,6 @@ def _prepare_auc_curve(
     g["t"] = pd.to_numeric(g["t"], errors="coerce")
     g["avg_score"] = pd.to_numeric(g["avg_score"], errors="coerce")
     g = g.dropna(subset=["t", "avg_score"]).sort_values("t")
-
     g = g.drop_duplicates(subset=["t"], keep="last")
 
     if g.empty:
@@ -477,8 +514,7 @@ def _step_auc_linear(t: np.ndarray, y: np.ndarray) -> float:
 
 def _step_auc_log(t: np.ndarray, y: np.ndarray) -> float:
     """
-    Aire exacte pour une courbe step-post intégrée par rapport à ln(t) :
-    ∫ y(t) d ln(t), uniquement sur les temps strictement positifs.
+    Aire exacte pour une courbe step-post intégrée par rapport à ln(t).
     """
     mask = t > 0.0
     t_pos = t[mask]
@@ -501,13 +537,10 @@ def compute_auc_scores(
 ) -> pd.DataFrame:
     """
     Calcule, pour chaque solveur :
-      - auc_linear : aire brute sous la courbe sur l'axe temps linéaire
-      - sdt        : aire normalisée par la durée totale
-      - auc_log    : aire brute sous la courbe sur l'axe ln(t)
-      - sdt_log    : aire normalisée par l'étendue ln(t_max)-ln(t_min)
-
-    sdt = score de domination temporelle
-    sdt_log = version logarithmique
+      - auc_linear
+      - sdt
+      - auc_log
+      - sdt_log
     """
     if ts_df.empty:
         return pd.DataFrame(columns=[by, "auc_linear", "sdt", "auc_log", "sdt_log"])
@@ -569,7 +602,6 @@ def plot_auc_scores_table(
 ) -> None:
     """
     Figure séparée contenant uniquement le tableau des métriques AUC / SDT.
-    Affichage à 5 chiffres après la virgule.
     """
     if auc_df.empty:
         return
@@ -794,23 +826,31 @@ def plot_score_distribution_over_time(
     def y_forward(y):
         y = np.asarray(y, dtype=float)
         out = np.empty_like(y)
+
         mask_mid = (y >= 0.0) & (y <= 1.0)
         out[mask_mid] = 1.0 - (1.0 - y[mask_mid]) ** BETA
+
         mask_low = (y < 0.0)
         out[mask_low] = y[mask_low] * (0.1 / MARGIN)
+
         mask_high = (y > 1.0)
         out[mask_high] = 1.0 + (y[mask_high] - 1.0) * (0.1 / MARGIN)
+
         return out
 
     def y_inverse(z):
         z = np.asarray(z, dtype=float)
         out = np.empty_like(z)
+
         mask_mid = (z >= 0.0) & (z <= 1.0)
         out[mask_mid] = 1.0 - (1.0 - z[mask_mid]) ** (1.0 / BETA)
+
         mask_low = (z < 0.0)
         out[mask_low] = z[mask_low] * (MARGIN / 0.1)
+
         mask_high = (z > 1.0)
         out[mask_high] = 1.0 + (z[mask_high] - 1.0) * (0.1 / MARGIN)
+
         return out
 
     ax.set_yscale("function", functions=(y_forward, y_inverse))
@@ -847,16 +887,36 @@ def generate_final_score_summary(
     t_min: Optional[float] = None,
     t_max: Optional[float] = None,
     log_time: bool = False,
+    min_n_instances: Optional[int] = None,
 ) -> Dict[str, str]:
     """
-    Pipeline: segments → stats → CSV+PNG + métriques AUC/SDT.
+    Pipeline : segments → stats → CSV + PNG + métriques AUC/SDT.
+
+    Important :
+      - un horizon global commun [t_min, t_max] est résolu ici ;
+      - si t_max n'est pas fourni, on prend le max global de df_traj.
     """
-    seg = collect_instance_segments(df_traj, by=by, t_min=t_min, t_max=t_max)
-    print("...instance segments collected...")
+    common_t_min, common_t_max = _resolve_common_time_window(
+        df_traj,
+        t_min=t_min,
+        t_max=t_max,
+    )
+
+    seg = collect_instance_segments(
+        df_traj,
+        by=by,
+        t_min=common_t_min,
+        t_max=common_t_max,
+    )
+    print(f"...instance segments collected on common horizon [{common_t_min}, {common_t_max}]...")
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    dist = compute_score_distribution_over_time(seg, by=by)
+    dist = compute_score_distribution_over_time(
+        seg,
+        by=by,
+        min_n_instances=min_n_instances,
+    )
     print("...compute score distribution over time...")
 
     ts = (
@@ -865,20 +925,17 @@ def generate_final_score_summary(
         .reset_index(drop=True)
     )
 
-    # Figure principale inchangée
     out_csv = out_dir / "average_scores_over_time.csv"
     out_png = out_dir / "average_scores_over_time.png"
     save_avg_scores_csv(ts, out_csv)
     plot_avg_scores_over_time(ts, out_png, by=by, log_time=log_time)
 
-    # Nouvelles métriques globales séparées
     auc_df = compute_auc_scores(ts, by=by)
     auc_csv = out_dir / "auc_scores_over_time.csv"
     auc_png = out_dir / "auc_scores_over_time.png"
     save_auc_scores_csv(auc_df, auc_csv)
     plot_auc_scores_table(auc_df, auc_png, by=by)
 
-    # Distribution des scores
     dist_csv = out_dir / "score_distribution_over_time.csv"
     dist_png = out_dir / "score_distribution_over_time.png"
     save_score_distribution_csv(dist, dist_csv)

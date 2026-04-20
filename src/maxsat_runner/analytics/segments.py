@@ -46,6 +46,7 @@ def _timeline_union(
 ) -> List[float]:
     """
     Construit la grille temporelle locale pour l'instance.
+
     Important :
       - si t_max est fourni et dépasse le dernier événement observé,
         on prolonge explicitement la timeline jusqu'à t_max ;
@@ -103,24 +104,28 @@ def _scores_segment_costs(costs: Dict[str, Optional[int]]) -> Dict[str, float]:
     Score relatif de type best/cost, borné dans [0,1].
 
     Règles :
-      - cost = None  -> score = 0.0
+      - cost = None  -> score = NaN (pas encore de valeur)
       - best = 0     -> score = 1 si cost = 0, sinon 0
       - sinon        -> score = best / cost
     """
     finite = [c for c in costs.values() if c is not None]
     if not finite:
-        return {k: 0.0 for k in costs}
+        return {k: float("nan") for k in costs}
+
     best = min(finite)
     out: Dict[str, float] = {}
+
     for k, c in costs.items():
         if c is None:
-            out[k] = 0.0
+            out[k] = float("nan")
         else:
             if best == 0:
                 out[k] = 1.0 if c == 0 else 0.0
             else:
                 out[k] = max(0.0, min(1.0, best / c))
+
     return out
+
 
 # ---------- API : segments de score(t) par instance ----------
 
@@ -136,7 +141,7 @@ def compute_relative_scores_timewindow_for_instance(
       ['instance', 't_start', 't_end', 'duration', 'solver', 'score', 'cost', 'best_cost']
 
     Sémantique :
-      - score = 0 avant le premier coût observé d'un solveur ;
+      - score = NaN avant le premier coût observé d'un solveur ;
       - entre deux événements, le coût est conservé (best-so-far) ;
       - si t_max est fourni, la trajectoire est prolongée jusqu'à t_max ;
       - aucun snapshot final de durée nulle n'est ajouté.

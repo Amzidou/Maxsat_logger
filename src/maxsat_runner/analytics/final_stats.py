@@ -44,8 +44,10 @@ def _basename_series(s: pd.Series) -> pd.Series:
 
 
 def _clip_score(x: float) -> float:
+    if pd.isna(x):
+        return float("nan")
     if not math.isfinite(x):
-        return 0.0
+        return float("nan")
     if x < 0.0:
         return 0.0
     if x > 1.0:
@@ -56,11 +58,6 @@ def _clip_score(x: float) -> float:
 def _nice_upper_bound(x_max: float, factor: float = 4.0 / 3.0) -> float:
     """
     Calcule une borne droite 'propre' et lisible pour l'axe du temps.
-
-    Exemples visés :
-      - 300 -> 400
-      - 30  -> 40
-      - 3e2 -> 4e2
     """
     if not math.isfinite(x_max):
         return 1.0
@@ -89,18 +86,12 @@ def _apply_time_axis_with_right_margin(
 ) -> None:
     """
     Applique une borne gauche et droite plus lisible sur l'axe du temps.
-
-    Objectifs :
-      - laisser une marge avant le premier point ;
-      - si on finit à 300, afficher par ex. jusqu'à 400 ;
-      - en log, si on finit à 3*10^2, afficher jusqu'à 4*10^2.
     """
     if raw_x_min is None or raw_x_max is None:
         return
 
     right_raw = _nice_upper_bound(raw_x_max, factor=4.0 / 3.0)
 
-    # cas échelle log classique
     if use_log:
         left_raw = max(1e-12, raw_x_min / 1.25)
         right_raw = max(right_raw, left_raw * 1.1)
@@ -113,7 +104,6 @@ def _apply_time_axis_with_right_margin(
         ax.set_xlabel("Elapsed (sec, log)")
         return
 
-    # cas linéaire ou log1p
     span = max(1e-12, raw_x_max - raw_x_min)
     left_pad = max(0.03 * max(raw_x_max, span), 1e-3)
     left_raw = raw_x_min - left_pad
@@ -125,6 +115,7 @@ def _apply_time_axis_with_right_margin(
     else:
         ax.set_xlim(left_raw, right_raw)
         ax.set_xlabel("Elapsed (sec)")
+
 
 def _short_solver_name(name: str) -> str:
     """
@@ -265,18 +256,17 @@ def _compute_time_stats_over_time(
 
     seg["t_start"] = pd.to_numeric(seg["t_start"], errors="coerce")
     seg["t_end"] = pd.to_numeric(seg["t_end"], errors="coerce")
-    seg["score"] = pd.to_numeric(seg["score"], errors="coerce")
+    seg["score"] = pd.to_numeric(seg["score"], errors="coerce").map(_clip_score)
 
     seg = seg[
         seg["t_start"].notna()
         & seg["t_end"].notna()
         & (seg["t_end"] > seg["t_start"])
+        & seg["score"].notna()
     ].copy()
 
     if seg.empty:
         return pd.DataFrame(columns=["t", by, "mean", "min", "max", "n_instances"])
-
-    seg["score"] = seg["score"].map(_clip_score)
 
     T = np.asarray(build_time_grid(seg), dtype=float)
     if T.size == 0:

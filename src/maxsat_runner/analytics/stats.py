@@ -439,7 +439,6 @@ def _nice_upper_bound(x_max: float, factor: float = 4.0 / 3.0) -> float:
 
     return 10.0 * base
 
-
 def _apply_x_mapping(ax: plt.Axes, x_min: float, x_max: float, use_log: bool, use_log1p: bool) -> None:
     """
     Applique l’échelle X avec une marge à gauche et une borne droite lisible.
@@ -481,60 +480,173 @@ def _apply_x_mapping(ax: plt.Axes, x_min: float, x_max: float, use_log: bool, us
         ax.set_xlim(left_raw, right_raw)
         ax.set_xlabel("Elapsed (sec)")
 
+def _compute_shared_x_axis_spec(
+    df_traj: pd.DataFrame,
+    instance_basename: str,
+    by: str = "solver_alias",
+    t_min: Optional[float] = None,
+    t_max: Optional[float] = None,
+    log_time: bool = False,
+) -> Optional[Dict[str, float]]:
+    """
+    Construit UNE spécification d'axe X commune pour une instance.
+
+    Les bornes x_min/x_max sont toujours en espace BRUT (secondes),
+    jamais dans l'espace transformé log1p.
+    """
+    df = df_traj.copy()
+    df["basename"] = df["instance"].apply(lambda p: Path(str(p)).name)
+    sub = _match_instance_name(df, instance_basename)
+
+    raw_parts: List[np.ndarray] = []
+
+    # temps des trajectoires
+    if not sub.empty:
+        xs = pd.to_numeric(sub["elapsed_sec"], errors="coerce").to_numpy(dtype=float)
+        xs = xs[np.isfinite(xs)]
+        if t_min is not None:
+            xs = xs[xs >= float(t_min)]
+        if t_max is not None:
+            xs = xs[xs <= float(t_max)]
+        if xs.size:
+            raw_parts.append(xs)
+
+    # temps des segments de score
+    seg = compute_relative_scores_timewindow_for_instance(
+        df_traj, instance_basename, by=by, t_min=t_min, t_max=t_max
+    )
+    if not seg.empty:
+        xs_seg = seg[["t_start", "t_end"]].astype(float).to_numpy().ravel()
+        xs_seg = xs_seg[np.isfinite(xs_seg)]
+        if t_min is not None:
+            xs_seg = xs_seg[xs_seg >= float(t_min)]
+        if t_max is not None:
+            xs_seg = xs_seg[xs_seg <= float(t_max)]
+        if xs_seg.size:
+            raw_parts.append(xs_seg)
+
+    # on force les bornes explicites dans le calcul si elles existent
+    forced_bounds = []
+    if t_min is not None:
+        forced_bounds.append(float(t_min))
+    if t_max is not None:
+        forced_bounds.append(float(t_max))
+    if forced_bounds:
+        raw_parts.append(np.array(forced_bounds, dtype=float))
+
+    if not raw_parts:
+        return None
+
+    xs_all = np.concatenate(raw_parts).astype(float)
+    xs_all = xs_all[np.isfinite(xs_all)]
+    if xs_all.size == 0:
+        return None
+
+    use_log, use_log1p = _decide_time_scale(xs_all, log_time)
+
+    x_min = float(np.min(xs_all))
+    x_max = float(np.max(xs_all))
+
+    if use_log:
+        eps = 1e-12
+        x_min = max(x_min, eps)
+        x_max = max(x_max, eps)
+
+    if x_min == x_max:
+        pad = max(1e-9, 0.02 * (abs(x_min) + 1.0))
+        x_min -= pad
+        x_max += pad
+        if use_log:
+            x_min = max(x_min, 1e-12)
+
+    return {
+        "use_log": use_log,
+        "use_log1p": use_log1p,
+        "x_min": x_min,
+        "x_max": x_max,
+    }
+
 def plot_trajectory_for_instance(
     df_traj: pd.DataFrame,
     instance_basename: str,
     out_png: Path,
     by: str = "solver_alias",
+    t_min: Optional[float] = None,
+    t_max: Optional[float] = None,
     log_time: bool = False,
+    axis_spec: Optional[Dict[str, float]] = None,
 ) -> None:
     df = df_traj.copy()
     df["basename"] = df["instance"].apply(lambda p: Path(str(p)).name)
     sub = _match_instance_name(df, instance_basename)
-    
+
     if sub.empty:
         return
+
+    sub = sub.copy()
+    sub["elapsed_sec"] = pd.to_numeric(sub["elapsed_sec"], errors="coerce")
+    sub["cost"] = pd.to_numeric(sub["cost"], errors="coerce")
+    sub = sub[np.isfinite(sub["elapsed_sec"].to_numpy(dtype=float))]
+    sub = sub[np.isfinite(sub["cost"].to_numpy(dtype=float))]
+
+    if t_min is not None:
+        sub = sub[sub["elapsed_sec"] >= float(t_min)]
+    if t_max is not None:
+        sub = sub[sub["elapsed_sec"] <= float(t_max)]
+
+    if sub.empty:
+        return
+
+    if axis_spec is None:
+        axis_spec = _compute_shared_x_axis_spec(
+            df_traj=df_traj,
+            instance_basename=instance_basename,
+            by=by,
+            t_min=t_min,
+            t_max=t_max,
+            log_time=log_time,
+        )
+
+    if axis_spec is None:
+        xs_all = sub["elapsed_sec"].astype(float).to_numpy()
+        use_log, use_log1p = _decide_time_scale(xs_all, log_time)
+        x_min = float(np.min(xs_all))
+        x_max = float(np.max(xs_all))
+    else:
+        use_log = bool(axis_spec["use_log"])
+        use_log1p = bool(axis_spec["use_log1p"])
+        x_min = float(axis_spec["x_min"])
+        x_max = float(axis_spec["x_max"])
 
     plt.figure(figsize=(16, 10), dpi=150)
     ax = plt.gca()
 
-    # décidez log/log1p
-    xs_all = sub["elapsed_sec"].astype(float).to_numpy()
-    use_log, use_log1p = _decide_time_scale(xs_all, log_time)
-    x_min = x_max = None
-
-    def xmap(x: np.ndarray) -> np.ndarray:
-        return np.log1p(x) if use_log1p else x
-
     ymin_g = ymax_g = None
+    eps = 1e-12
 
     for key, grp in sub.groupby(by):
         g = grp.sort_values("elapsed_sec")
-        xs = g["elapsed_sec"].astype(float).to_numpy()
+        xs_raw = g["elapsed_sec"].astype(float).to_numpy()
         ys = g["cost"].astype(float).to_numpy()
-        if xs.size == 0:
+        if xs_raw.size == 0:
             continue
 
-        xs_plot = xmap(xs)
-        lxmin, lxmax = float(xs_plot.min()), float(xs_plot.max())
-        x_min = lxmin if x_min is None else min(x_min, lxmin)
-        x_max = lxmax if x_max is None else max(x_max, lxmax)
+        if use_log:
+            xs_plot = np.maximum(xs_raw, eps)
+        elif use_log1p:
+            xs_plot = np.log1p(xs_raw)
+        else:
+            xs_plot = xs_raw
 
-        # bornes Y
         lymin, lymax = float(np.min(ys)), float(np.max(ys))
         ymin_g = lymin if ymin_g is None else min(ymin_g, lymin)
         ymax_g = lymax if ymax_g is None else max(ymax_g, lymax)
 
-        # tracer ligne + points avec même couleur
         line, = ax.step(xs_plot, ys, where="post", linewidth=1.0, label=str(key))
-        color = line.get_color()
-        ax.plot(xs_plot, ys, ".", linewidth=0, color=color)
+        ax.plot(xs_plot, ys, ".", linewidth=0, color=line.get_color())
 
-    # X
-    if x_min is not None and x_max is not None:
-        _apply_x_mapping(ax, x_min, x_max, use_log, use_log1p)
+    _apply_x_mapping(ax, x_min, x_max, use_log, use_log1p)
 
-    # Y
     if ymin_g is not None and ymax_g is not None and ymin_g == ymax_g:
         base = float(ymin_g)
         pad_y = max(1.0, 0.02 * (abs(base) + 1.0))
@@ -545,7 +657,14 @@ def plot_trajectory_for_instance(
     _legend_bottom()
     _savefig(out_png)
 
-def plot_all_instances(df_traj: pd.DataFrame, out_dir: Path, by: str = "solver_alias", log_time: bool=False) -> List[Dict[str, str]]:
+def plot_all_instances(
+    df_traj: pd.DataFrame,
+    out_dir: Path,
+    by: str = "solver_alias",
+    t_min: Optional[float] = None,
+    t_max: Optional[float] = None,
+    log_time: bool = False,
+) -> List[Dict[str, str]]:
     df = df_traj.copy()
     df["basename"] = df["instance"].apply(lambda p: Path(str(p)).name)
     out_instances = out_dir / "instances"
@@ -553,8 +672,25 @@ def plot_all_instances(df_traj: pd.DataFrame, out_dir: Path, by: str = "solver_a
 
     produced: List[Dict[str, str]] = []
     for base in sorted(df["basename"].unique()):
+        axis_spec = _compute_shared_x_axis_spec(
+            df_traj=df_traj,
+            instance_basename=base,
+            by=by,
+            t_min=t_min,
+            t_max=t_max,
+            log_time=log_time,
+        )
         png = out_instances / f"plot_{base}.png"
-        plot_trajectory_for_instance(df_traj, base, png, by=by, log_time=log_time)
+        plot_trajectory_for_instance(
+            df_traj,
+            base,
+            png,
+            by=by,
+            t_min=t_min,
+            t_max=t_max,
+            log_time=log_time,
+            axis_spec=axis_spec,
+        )
         if png.exists():
             produced.append({"instance": base, "png": str(png)})
     return produced
@@ -568,60 +704,65 @@ def plot_scores_for_instance(
     by: str = "solver_alias",
     t_min: Optional[float] = None,
     t_max: Optional[float] = None,
-    log_time: bool = False
+    log_time: bool = False,
+    axis_spec: Optional[Dict[str, float]] = None,
 ) -> None:
-    """score(t) ∈[0,1] par solver, step-post + points (même couleur), X=lin/log/log1p, Y étiré vers 1."""
+    """score(t) ∈ [0,1] par solver, avec même axe X que la trajectoire."""
     seg = compute_relative_scores_timewindow_for_instance(
         df_traj, instance_basename, by=by, t_min=t_min, t_max=t_max
     )
     if seg.empty:
         return
 
+    if axis_spec is None:
+        axis_spec = _compute_shared_x_axis_spec(
+            df_traj=df_traj,
+            instance_basename=instance_basename,
+            by=by,
+            t_min=t_min,
+            t_max=t_max,
+            log_time=log_time,
+        )
+
+    if axis_spec is None:
+        xs_all = np.concatenate([
+            g.sort_values(["t_start", "t_end"])[["t_start", "t_end"]].to_numpy().ravel()
+            for _, g in seg.groupby("solver")
+        ]) if not seg.empty else np.array([])
+        xs_all = xs_all.astype(float) if xs_all.size else xs_all
+        use_log, use_log1p = _decide_time_scale(xs_all, log_time)
+        x_min = float(np.min(xs_all))
+        x_max = float(np.max(xs_all))
+    else:
+        use_log = bool(axis_spec["use_log"])
+        use_log1p = bool(axis_spec["use_log1p"])
+        x_min = float(axis_spec["x_min"])
+        x_max = float(axis_spec["x_max"])
+
     plt.figure(figsize=(16, 10), dpi=150)
     ax = plt.gca()
 
-    # Décision d’échelle temps à partir de toutes les abscisses disponibles
-    xs_all = np.concatenate([
-        g.sort_values(["t_start", "t_end"])[["t_start", "t_end"]].to_numpy().ravel()
-        for _, g in seg.groupby("solver")
-    ]) if not seg.empty else np.array([])
-    xs_all = xs_all.astype(float) if xs_all.size else xs_all
-    use_log, use_log1p = _decide_time_scale(xs_all, log_time)
-
-    def xmap(x: np.ndarray) -> np.ndarray:
-        if use_log1p:
-            return np.log1p(x)
-        return x  # si log base10: on laisse brut et on met ax en log
-
-    # Tracé
-    x_min = x_max = None
     eps = 1e-12
     for key, g in seg.groupby("solver"):
         g = g.sort_values(["t_start", "t_end"]).reset_index(drop=True)
         if g.empty:
             continue
 
-        xs = g["t_start"].astype(float).to_numpy()
-        xs = np.append(xs, float(g["t_end"].iloc[-1]))
+        xs_raw = g["t_start"].astype(float).to_numpy()
+        xs_raw = np.append(xs_raw, float(g["t_end"].iloc[-1]))
         ys = g["score"].fillna(0.0).astype(float).to_numpy()
         ys = np.append(ys, float(g["score"].fillna(0.0).iloc[-1]))
 
-        # Si log base10 → garder brut (mais pas <=0), si log1p → transformer
         if use_log:
-            xs = np.maximum(xs, eps)  # éviter 0 sur un axe log
-            xs_plot = xs
+            xs_plot = np.maximum(xs_raw, eps)
+        elif use_log1p:
+            xs_plot = np.log1p(xs_raw)
         else:
-            xs_plot = xmap(xs)
-
-        # borne x globale (dans l’espace PLOT, i.e., après mapping pour log1p)
-        lxmin, lxmax = float(xs_plot.min()), float(xs_plot.max())
-        x_min = lxmin if x_min is None else min(x_min, lxmin)
-        x_max = lxmax if x_max is None else max(x_max, lxmax)
+            xs_plot = xs_raw
 
         line, = ax.step(xs_plot, ys, where="post", linewidth=1.0, label=str(key))
         ax.plot(xs_plot, ys, ".", color=line.get_color(), linewidth=0)
 
-    # ---- Axe Y étiré vers 1 (avec marge) ----
     BETA = 0.4
     MARGIN = 0.05
 
@@ -630,7 +771,7 @@ def plot_scores_for_instance(
         out = np.empty_like(y)
 
         mask_mid = (y >= 0.0) & (y <= 1.0)
-        out[mask_mid] = 1.0 - (1.0 - y[mask_mid])**BETA
+        out[mask_mid] = 1.0 - (1.0 - y[mask_mid]) ** BETA
 
         mask_low = (y < 0.0)
         out[mask_low] = y[mask_low] * (0.1 / MARGIN)
@@ -644,7 +785,7 @@ def plot_scores_for_instance(
         out = np.empty_like(z)
 
         mask_mid = (z >= 0.0) & (z <= 1.0)
-        out[mask_mid] = 1.0 - (1.0 - z[mask_mid])**(1.0/BETA)
+        out[mask_mid] = 1.0 - (1.0 - z[mask_mid]) ** (1.0 / BETA)
 
         mask_low = (z < 0.0)
         out[mask_low] = z[mask_low] * (MARGIN / 0.1)
@@ -655,14 +796,12 @@ def plot_scores_for_instance(
 
     ax.set_yscale(FuncScale(ax, (y_forward, y_inverse)))
     ax.set_ylim(-MARGIN, 1.0 + MARGIN)
-    ax.yaxis.set_major_locator(FixedLocator([0.0,0.2,0.4,0.6,0.8,0.9,0.95,0.98,0.99,1.0]))
+    ax.yaxis.set_major_locator(FixedLocator([0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.95, 0.98, 0.99, 1.0]))
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
     ax.set_ylabel("Relative score (best/cost)")
     ax.grid(True, which="both", alpha=0.25)
 
-    # ---- Axe X selon la décision ----
-    if x_min is not None and x_max is not None:
-        _apply_x_mapping(ax, x_min, x_max, use_log=use_log, use_log1p=use_log1p)
+    _apply_x_mapping(ax, x_min, x_max, use_log=use_log, use_log1p=use_log1p)
 
     ax.set_title(f"Scores relatifs – {instance_basename}")
     _legend_bottom()
@@ -674,7 +813,7 @@ def plot_all_instances_scores(
     by: str = "solver_alias",
     t_min: Optional[float] = None,
     t_max: Optional[float] = None,
-    log_time: bool=False
+    log_time: bool = False
 ) -> List[Dict[str, str]]:
     df = df_traj.copy()
     df["basename"] = df["instance"].apply(lambda p: Path(str(p)).name)
@@ -682,10 +821,27 @@ def plot_all_instances_scores(
     out_scores.mkdir(parents=True, exist_ok=True)
 
     produced: List[Dict[str, str]] = []
-    
+
     for base in sorted(df["basename"].unique()):
+        axis_spec = _compute_shared_x_axis_spec(
+            df_traj=df_traj,
+            instance_basename=base,
+            by=by,
+            t_min=t_min,
+            t_max=t_max,
+            log_time=log_time,
+        )
         png = out_scores / f"scores_{base}.png"
-        plot_scores_for_instance(df_traj, base, png, by=by, t_min=t_min, t_max=t_max, log_time=log_time)
+        plot_scores_for_instance(
+            df_traj,
+            base,
+            png,
+            by=by,
+            t_min=t_min,
+            t_max=t_max,
+            log_time=log_time,
+            axis_spec=axis_spec,
+        )
         if png.exists():
             produced.append({"instance": base, "png": str(png)})
     return produced
@@ -907,10 +1063,34 @@ def generate_basic_reports(
     traj_png = None
     if instance_basename:
         traj_png = out_dir / f"plot_trajectory_{instance_basename}.png"
-        plot_trajectory_for_instance(df_traj, instance_basename, traj_png, by=by, log_time=log_time)
+        axis_spec = _compute_shared_x_axis_spec(
+            df_traj=df_traj,
+            instance_basename=instance_basename,
+            by=by,
+            t_min=common_t_min,
+            t_max=common_t_max,
+            log_time=log_time,
+        )
+        plot_trajectory_for_instance(
+            df_traj,
+            instance_basename,
+            traj_png,
+            by=by,
+            t_min=common_t_min,
+            t_max=common_t_max,
+            log_time=log_time,
+            axis_spec=axis_spec,
+        )
 
     instance_cost_plots = (
-        plot_all_instances(df_traj, out_dir, by=by, log_time=log_time)
+        plot_all_instances(
+            df_traj,
+            out_dir,
+            by=by,
+            t_min=common_t_min,
+            t_max=common_t_max,
+            log_time=log_time,
+        )
         if per_instance else []
     )
 

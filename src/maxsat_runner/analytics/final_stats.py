@@ -611,9 +611,14 @@ def plot_auc_scores_table(
         disp[col] = disp[col].map(lambda x: f"{x:.5f}" if pd.notna(x) else "NA")
 
     n_rows = len(disp)
+    n_cols = len(disp.columns)
+
+    # largeur un peu plus grande si les noms de solveurs sont longs
+    max_solver_len = disp["Solver"].astype(str).map(len).max() if not disp.empty else 10
+    fig_width = max(10.5, min(16, 8 + 0.12 * max_solver_len))
     fig_height = max(2.8, 0.55 * (n_rows + 1))
 
-    fig, ax = plt.subplots(figsize=(10.5, fig_height), dpi=150)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=150)
     ax.axis("off")
     ax.set_title("Temporal domination metrics (AUC / SDT)", fontsize=13, pad=12)
 
@@ -629,10 +634,23 @@ def plot_auc_scores_table(
     table.set_fontsize(10)
     table.scale(1.0, 1.25)
 
+    # Ajustement automatique de la largeur des colonnes
+    try:
+        table.auto_set_column_width(col=list(range(n_cols)))
+    except Exception:
+        pass
+
+    # Aligner la colonne Solver à gauche pour améliorer la lisibilité
+    solver_col_idx = list(disp.columns).index("Solver")
+    for (row, col), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_text_props(weight="bold")
+        if col == solver_col_idx:
+            cell.get_text().set_ha("left")
+
     out_png.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_png, bbox_inches="tight")
     plt.close(fig)
-
 
 # ============ 5) Plot + CSV + Driver ============
 

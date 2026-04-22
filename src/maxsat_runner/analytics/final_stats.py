@@ -10,7 +10,10 @@ import numpy as np
 import matplotlib.ticker as mtick
 from matplotlib.ticker import FixedLocator, FormatStrFormatter
 
-from .segments import compute_relative_scores_timewindow_for_instance
+from .segments import (
+    compute_relative_scores_timewindow_for_instance,
+    _compute_relative_scores_timewindow_for_subdf,
+)
 
 
 # ============ Utils ============
@@ -175,16 +178,26 @@ def collect_instance_segments(
 ) -> pd.DataFrame:
     """
     Concatène les segments score(t) de toutes les instances sur une
-    fenêtre temporelle commune [t_min, t_max].
+    fenêtre temporelle commune [t_min, t_max], sans rescanner df_traj
+    pour chaque instance.
     """
+    if "instance" not in df_traj.columns:
+        raise KeyError("La colonne 'instance' est requise dans df_traj.")
+
     df = df_traj.copy()
-    df["basename"] = _basename_series(df["instance"])
-    instances = sorted(df["basename"].unique())
+
+    if "basename" not in df.columns:
+        df["basename"] = _basename_series(df["instance"])
 
     parts: List[pd.DataFrame] = []
-    for inst in instances:
-        seg = compute_relative_scores_timewindow_for_instance(
-            df_traj, inst, by=by, t_min=t_min, t_max=t_max
+
+    for inst, sub in df.groupby("basename", sort=True):
+        seg = _compute_relative_scores_timewindow_for_subdf(
+            sub=sub,
+            instance_basename=str(inst),
+            by=by,
+            t_min=t_min,
+            t_max=t_max,
         )
         if not seg.empty:
             parts.append(seg)
@@ -199,7 +212,6 @@ def collect_instance_segments(
     all_seg["t_end"] = pd.to_numeric(all_seg["t_end"], errors="coerce").astype(float)
     all_seg["score"] = pd.to_numeric(all_seg["score"], errors="coerce").astype(float)
     return all_seg
-
 
 # ============ 2) Grille temporelle globale ============
 
@@ -237,22 +249,35 @@ def _compute_time_stats_over_time(
     """
     Retourne un DataFrame long avec colonnes :
     ['t', by, 'mean', 'min', 'max', 'n_instances'].
-    """
-    if segments_df.empty:
-        return pd.DataFrame(columns=["t", by, "mean", "min", "max", "n_instances"])
 
-    seg = segments_df.copy()
+    Version plus légère :
+      - évite plusieurs copies inutiles ;
+      - réutilise 'basename' s'il existe déjà ;
+      - construit T avec np.unique directement ;
+      - remplace la liste géante events[k] par des dictionnaires clairsemés ;
+      - garde la même sémantique de sortie.
+    """
+    empty_cols = ["t", by, "mean", "min", "max", "n_instances"]
+
+    if segments_df.empty:
+        return pd.DataFrame(columns=empty_cols)
 
     required = {"instance", "t_start", "t_end", "score"}
-    missing = required - set(seg.columns)
+    missing = required - set(segments_df.columns)
     if missing:
         raise KeyError(f"Colonnes manquantes: {sorted(missing)}")
 
-    seg["basename"] = _basename_series(seg["instance"])
-
-    label_col = by if by in seg.columns else ("solver" if "solver" in seg.columns else None)
+    label_col = by if by in segments_df.columns else ("solver" if "solver" in segments_df.columns else None)
     if label_col is None:
         raise KeyError(f"Aucune colonne '{by}' ni 'solver' trouvée dans segments_df.")
+
+    cols = ["instance", "t_start", "t_end", "score", label_col]
+    seg = segments_df.loc[:, cols].copy()
+
+    if "basename" in segments_df.columns:
+        seg["basename"] = segments_df["basename"].astype(str)
+    else:
+        seg["basename"] = _basename_series(segments_df["instance"])
 
     seg["t_start"] = pd.to_numeric(seg["t_start"], errors="coerce")
     seg["t_end"] = pd.to_numeric(seg["t_end"], errors="coerce")
@@ -263,22 +288,30 @@ def _compute_time_stats_over_time(
         & seg["t_end"].notna()
         & (seg["t_end"] > seg["t_start"])
         & seg["score"].notna()
-    ].copy()
+    ]
 
     if seg.empty:
-        return pd.DataFrame(columns=["t", by, "mean", "min", "max", "n_instances"])
+        return pd.DataFrame(columns=empty_cols)
 
-    T = np.asarray(build_time_grid(seg), dtype=float)
-    if T.size == 0:
-        return pd.DataFrame(columns=["t", by, "mean", "min", "max", "n_instances"])
+    # Grille exacte, mais plus compacte
+    T = np.unique(
+        np.concatenate([
+            seg["t_start"].to_numpy(dtype=float, copy=False),
+            seg["t_end"].to_numpy(dtype=float, copy=False),
+        ])
+    )
+    T = T[np.isfinite(T)]
+
+    if T.size < 2:
+        return pd.DataFrame(columns=empty_cols)
 
     n_intervals = T.size - 1
     if n_intervals <= 0:
-        return pd.DataFrame(columns=["t", by, "mean", "min", "max", "n_instances"])
+        return pd.DataFrame(columns=empty_cols)
 
     pieces: List[pd.DataFrame] = []
 
-    for label, g in seg.groupby(label_col, sort=True):
+    for label, g in seg.groupby(label_col, sort=True, observed=True):
         starts = g["t_start"].to_numpy(dtype=float, copy=False)
         ends = g["t_end"].to_numpy(dtype=float, copy=False)
         instances = g["basename"].astype(str).to_numpy(copy=False)
@@ -296,12 +329,15 @@ def _compute_time_stats_over_time(
         instances = instances[valid]
         scores = scores[valid]
 
-        events: List[List[Tuple[int, str, float]]] = [[] for _ in range(n_intervals)]
+        # Événements clairsemés au lieu d'une liste de longueur n_intervals
+        start_events: Dict[int, List[Tuple[str, float]]] = {}
+        end_events: Dict[int, List[str]] = {}
+
         for start_idx, end_idx, inst, sc in zip(i0, i1, instances, scores):
             if 0 <= start_idx < n_intervals:
-                events[start_idx].append((1, inst, float(sc)))
+                start_events.setdefault(int(start_idx), []).append((str(inst), float(sc)))
             if 0 <= end_idx < n_intervals:
-                events[end_idx].append((0, inst, 0.0))
+                end_events.setdefault(int(end_idx), []).append(str(inst))
 
         mean_arr = np.full(n_intervals, np.nan, dtype=float)
         min_arr = np.full(n_intervals, np.nan, dtype=float)
@@ -361,13 +397,15 @@ def _compute_time_stats_over_time(
                 heapq.heappop(max_heap)
 
         for k in range(n_intervals):
-            if events[k]:
-                for kind, inst, sc in events[k]:
-                    if kind == 0:
-                        _remove_active(inst)
-                for kind, inst, sc in events[k]:
-                    if kind == 1:
-                        _push_active(inst, sc)
+            ended = end_events.get(k)
+            if ended:
+                for inst in ended:
+                    _remove_active(inst)
+
+            started = start_events.get(k)
+            if started:
+                for inst, sc in started:
+                    _push_active(inst, sc)
 
             if count_active > 0:
                 mean_arr[k] = sum_active / count_active
@@ -416,14 +454,13 @@ def _compute_time_stats_over_time(
         }))
 
     if not pieces:
-        return pd.DataFrame(columns=["t", by, "mean", "min", "max", "n_instances"])
+        return pd.DataFrame(columns=empty_cols)
 
     return (
         pd.concat(pieces, ignore_index=True)
         .sort_values(["t", by], kind="stable")
         .reset_index(drop=True)
     )
-
 
 def compute_avg_scores_over_time(
     segments_df: pd.DataFrame,

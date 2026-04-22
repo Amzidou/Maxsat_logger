@@ -109,8 +109,15 @@ def cli_stats(
     instance: Optional[str] = typer.Option(None, "--instance", help="Basename d'une instance pour tracer la trajectoire"),
     t_min: Optional[float] = typer.Option(None, "--t-min", help="Borne inférieure de temps (sec)"),
     t_max: Optional[float] = typer.Option(None, "--t-max", help="Borne supérieure de temps (sec)"),
-    t_at: Optional[float]  = typer.Option(None, "--t-at",  help="Snapshot à t_at (leaderboard relatif)"),
-    log_time: bool = typer.Option(False, "--log-time", help="Axe du temps en échelle logarithmique"),  
+    t_at: Optional[float]  = typer.Option(None, "--t-at", help="Snapshot à t_at (leaderboard relatif)"),
+    log_time: bool = typer.Option(False, "--log-time", help="Axe du temps en échelle logarithmique"),
+    per_instance: bool = typer.Option(True, "--per-instance", help="Génère les trajectoires coût/temps par instance"),
+    per_instance_scores: bool = typer.Option(True, "--per-instance-scores", help="Génère les scores relatifs par instance"),
+    do_leaderboard: bool = typer.Option(True, "--do-leaderboard/--no-leaderboard", help="Génère le leaderboard classique"),
+    do_relative_leaderboard: bool = typer.Option(True, "--do-relative-leaderboard/--no-relative-leaderboard", help="Génère le leaderboard relatif"),
+    do_final_summary: bool = typer.Option(True, "--do-final-summary/--no-final-summary", help="Génère les stats temporelles finales"),
+    do_replicas_by_solver: bool = typer.Option(False, "--do-replicas-by-solver", help="Génère les stats de réplicas par solveur"),
+    min_n_instances: Optional[int] = typer.Option(None, "--min-n-instances", help="Nombre minimal d'instances pour garder un point temporel"),
 ):
     try:
         res = generate_basic_reports(
@@ -118,10 +125,17 @@ def cli_stats(
             Path(out),
             by=by,
             instance_basename=instance,
+            per_instance=per_instance,
+            per_instance_scores=per_instance_scores,
+            do_leaderboard=do_leaderboard,
+            do_relative_leaderboard=do_relative_leaderboard,
+            do_final_summary=do_final_summary,
+            do_replicas_by_solver=do_replicas_by_solver,
             t_min=t_min,
             t_max=t_max,
             t_at=t_at,
             log_time=log_time,
+            min_n_instances=min_n_instances,
         )
         typer.echo(json.dumps({"ok": True, **res}, ensure_ascii=False, indent=2))
     except Exception as ex:

@@ -25,19 +25,6 @@ def _match_instance_name(df: pd.DataFrame, instance_basename: str) -> pd.DataFra
     )
     return df[mask]
 
-
-def _instance_window(df_traj: pd.DataFrame, instance_basename: str) -> Tuple[float, float]:
-    df = df_traj.copy()
-    df["basename"] = df["instance"].apply(lambda p: Path(str(p)).name)
-    sub = _match_instance_name(df, instance_basename)
-    if sub.empty:
-        return (0.0, 0.0)
-
-    tmin = float(pd.to_numeric(sub["elapsed_sec"], errors="coerce").min())
-    tmax = float(pd.to_numeric(sub["elapsed_sec"], errors="coerce").max())
-    return (tmin, tmax)
-
-
 def _timeline_union(
     sub: pd.DataFrame,
     by: str,
@@ -103,21 +90,25 @@ def _scores_segment_costs(costs: Dict[str, Optional[int]]) -> Dict[str, float]:
     """
     Score relatif de type best/cost, borné dans [0,1].
 
-    Règles :
-      - cost = None  -> score = NaN (pas encore de valeur)
-      - best = 0     -> score = 1 si cost = 0, sinon 0
-      - sinon        -> score = best / cost
+    Nouvelle sémantique :
+      - cost = None est traité comme +inf
+      - si aucun solveur n'a encore de solution, tous obtiennent 1.0
+      - si au moins un solveur a une solution, ceux à +inf obtiennent 0.0
+      - sinon, score = best / cost
     """
     finite = [c for c in costs.values() if c is not None]
+
+    # Cas où personne n'a encore trouvé de solution
     if not finite:
-        return {k: float("nan") for k in costs}
+        return {k: 1.0 for k in costs}
 
     best = min(finite)
     out: Dict[str, float] = {}
 
     for k, c in costs.items():
+        # +inf -> score nul dès qu'au moins un solveur a une solution
         if c is None:
-            out[k] = float("nan")
+            out[k] = 0.0
         else:
             if best == 0:
                 out[k] = 1.0 if c == 0 else 0.0
@@ -129,27 +120,17 @@ def _scores_segment_costs(costs: Dict[str, Optional[int]]) -> Dict[str, float]:
 
 # ---------- API : segments de score(t) par instance ----------
 
-def compute_relative_scores_timewindow_for_instance(
-    df_traj: pd.DataFrame,
+def _compute_relative_scores_timewindow_for_subdf(
+    sub: pd.DataFrame,
     instance_basename: str,
     by: str = "solver_alias",
     t_min: Optional[float] = None,
     t_max: Optional[float] = None,
 ) -> pd.DataFrame:
     """
-    Retourne un DataFrame long de segments pour une instance :
-      ['instance', 't_start', 't_end', 'duration', 'solver', 'score', 'cost', 'best_cost']
-
-    Sémantique :
-      - score = NaN avant le premier coût observé d'un solveur ;
-      - entre deux événements, le coût est conservé (best-so-far) ;
-      - si t_max est fourni, la trajectoire est prolongée jusqu'à t_max ;
-      - aucun snapshot final de durée nulle n'est ajouté.
+    Version interne optimisée : travaille sur un sous-DataFrame déjà filtré
+    pour UNE seule instance.
     """
-    df = df_traj.copy()
-    df["basename"] = df["instance"].apply(lambda p: Path(str(p)).name)
-
-    sub = _match_instance_name(df, instance_basename).copy()
     if sub.empty:
         return pd.DataFrame(
             columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
@@ -159,21 +140,26 @@ def compute_relative_scores_timewindow_for_instance(
     if label_col is None:
         raise KeyError(f"Aucune colonne '{by}' ni 'solver' trouvée dans df_traj.")
 
-    sub["elapsed_sec"] = pd.to_numeric(sub["elapsed_sec"], errors="coerce")
-    sub["cost"] = pd.to_numeric(sub["cost"], errors="coerce")
-    sub = sub[sub["elapsed_sec"].notna() & sub["cost"].notna()].copy()
+    needed_cols = ["elapsed_sec", "cost", label_col]
+    missing = [c for c in needed_cols if c not in sub.columns]
+    if missing:
+        raise KeyError(f"Colonnes manquantes dans le sous-DataFrame: {missing}")
 
-    if sub.empty:
+    work = sub[needed_cols].copy()
+    work["elapsed_sec"] = pd.to_numeric(work["elapsed_sec"], errors="coerce")
+    work["cost"] = pd.to_numeric(work["cost"], errors="coerce")
+    work = work[work["elapsed_sec"].notna() & work["cost"].notna()].copy()
+
+    if work.empty:
         return pd.DataFrame(
             columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
         )
 
-    sub["cost"] = sub["cost"].astype(int)
+    work["cost"] = work["cost"].astype(int)
 
-    t_lo_nat, t_hi_nat = _instance_window(df_traj, instance_basename)
+    t_lo_nat = float(work["elapsed_sec"].min())
+    t_hi_nat = float(work["elapsed_sec"].max())
 
-    # Si t_min/t_max sont fournis, on respecte la fenêtre demandée.
-    # Cela permet notamment de prolonger jusqu'à un horizon global commun.
     lo = t_lo_nat if t_min is None else float(t_min)
     hi = t_hi_nat if t_max is None else float(t_max)
 
@@ -182,7 +168,9 @@ def compute_relative_scores_timewindow_for_instance(
             columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
         )
 
-    per_solver: Dict[str, Dict[str, List]] = {}
+    all_solver_labels = sorted(sub[label_col].dropna().astype(str).unique())
+    per_solver: Dict[str, Dict[str, List]] = {label: {"t": [], "c": []} for label in all_solver_labels}
+
     for key, grp in sub.groupby(label_col, sort=True):
         g = grp.sort_values("elapsed_sec", kind="stable")
         per_solver[str(key)] = {
@@ -190,7 +178,7 @@ def compute_relative_scores_timewindow_for_instance(
             "c": g["cost"].astype(int).tolist(),
         }
 
-    T = _timeline_union(sub, label_col, lo, hi)
+    T = _timeline_union(work, by,lo, hi)
     if len(T) < 2:
         return pd.DataFrame(
             columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
@@ -199,7 +187,6 @@ def compute_relative_scores_timewindow_for_instance(
     rows: List[Dict] = []
     hints = {k: 0 for k in per_solver}
 
-    # Segments [t_i, t_{i+1})
     for i in range(len(T) - 1):
         t0, t1 = float(T[i]), float(T[i + 1])
         if t1 <= t0:
@@ -227,4 +214,141 @@ def compute_relative_scores_timewindow_for_instance(
                 "best_cost": best_now,
             })
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows,
+        columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
+    )
+
+def compute_relative_scores_timewindow_for_instance(
+    df_traj: pd.DataFrame,
+    instance_basename: str,
+    by: str = "solver_alias",
+    t_min: Optional[float] = None,
+    t_max: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Retourne un DataFrame long de segments pour une instance :
+      ['instance', 't_start', 't_end', 'duration', 'solver', 'score', 'cost', 'best_cost']
+
+    Sémantique :
+      - score = NaN avant le premier coût observé d'un solveur ;
+      - entre deux événements, le coût est conservé (best-so-far) ;
+      - si t_max est fourni, la trajectoire est prolongée jusqu'à t_max ;
+      - aucun snapshot final de durée nulle n'est ajouté.
+
+    Optimisations :
+      - ne copie pas tout df_traj ;
+      - évite un second scan global via _instance_window() ;
+      - ne garde que les colonnes utiles.
+    """
+    if "instance" not in df_traj.columns:
+        raise KeyError("La colonne 'instance' est requise dans df_traj.")
+
+    label_col = by if by in df_traj.columns else ("solver" if "solver" in df_traj.columns else None)
+    if label_col is None:
+        raise KeyError(f"Aucune colonne '{by}' ni 'solver' trouvée dans df_traj.")
+
+    required_cols = ["instance", "elapsed_sec", "cost", label_col]
+    missing = [c for c in required_cols if c not in df_traj.columns]
+    if missing:
+        raise KeyError(f"Colonnes manquantes dans df_traj: {missing}")
+
+    # Réutilise basename si déjà présent, sinon le construit à la volée sans copier tout le DF
+    if "basename" in df_traj.columns:
+        basename_series = df_traj["basename"].astype(str)
+    else:
+        basename_series = df_traj["instance"].astype(str).map(lambda p: Path(p).name)
+
+    name = str(instance_basename).lower().strip()
+
+    # 1) match exact
+    mask = basename_series.str.lower().eq(name)
+
+    # 2) match tolérant si nécessaire
+    if not mask.any():
+        possible_suffixes = (".wcnf", ".wcnf.gz", ".cnf", ".cnf.gz")
+        b_lower = basename_series.str.lower()
+        mask = b_lower.apply(
+            lambda x: any(x.endswith(suf) and name in x for suf in possible_suffixes)
+        )
+
+    if not mask.any():
+        return pd.DataFrame(
+            columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
+        )
+
+    sub = df_traj.loc[mask, required_cols].copy()
+
+    sub["elapsed_sec"] = pd.to_numeric(sub["elapsed_sec"], errors="coerce")
+    sub["cost"] = pd.to_numeric(sub["cost"], errors="coerce")
+    sub = sub[sub["elapsed_sec"].notna() & sub["cost"].notna()].copy()
+
+    if sub.empty:
+        return pd.DataFrame(
+            columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
+        )
+
+    sub["cost"] = sub["cost"].astype(int)
+
+    # Fenêtre naturelle calculée directement depuis sub
+    t_lo_nat = float(sub["elapsed_sec"].min())
+    t_hi_nat = float(sub["elapsed_sec"].max())
+
+    lo = t_lo_nat if t_min is None else float(t_min)
+    hi = t_hi_nat if t_max is None else float(t_max)
+
+    if hi <= lo:
+        return pd.DataFrame(
+            columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
+        )
+
+    all_solver_labels = sorted(df_traj[label_col].dropna().astype(str).unique())
+    per_solver: Dict[str, Dict[str, List]] = {label: {"t": [], "c": []} for label in all_solver_labels}
+
+    for key, grp in sub.groupby(label_col, sort=True):
+        g = grp.sort_values("elapsed_sec", kind="stable")
+        per_solver[str(key)] = {
+            "t": g["elapsed_sec"].astype(float).tolist(),
+            "c": g["cost"].astype(int).tolist(),
+        }
+
+    T = _timeline_union(sub, label_col, lo, hi)
+    if len(T) < 2:
+        return pd.DataFrame(
+            columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
+        )
+
+    rows: List[Dict] = []
+    hints = {k: 0 for k in per_solver}
+
+    for i in range(len(T) - 1):
+        t0, t1 = float(T[i]), float(T[i + 1])
+        if t1 <= t0:
+            continue
+
+        costs_now: Dict[str, Optional[int]] = {}
+        for k, ser in per_solver.items():
+            c, h = _cost_at_time(ser["t"], ser["c"], t0, hints[k])
+            costs_now[k] = c
+            hints[k] = h
+
+        scores = _scores_segment_costs(costs_now)
+        finite_costs = [v for v in costs_now.values() if v is not None]
+        best_now = min(finite_costs) if finite_costs else None
+
+        for k in per_solver.keys():
+            rows.append({
+                "instance": str(instance_basename),
+                "t_start": t0,
+                "t_end": t1,
+                "duration": t1 - t0,
+                "solver": k,
+                "score": scores[k],
+                "cost": costs_now[k],
+                "best_cost": best_now,
+            })
+
+    return pd.DataFrame(
+        rows,
+        columns=["instance", "t_start", "t_end", "duration", "solver", "score", "cost", "best_cost"]
+    )

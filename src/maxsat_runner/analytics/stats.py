@@ -999,12 +999,18 @@ def plot_replicas_by_solver_gallery(
 
 # ===================== Driver global =====================
 
+
 def generate_basic_reports(
     runs_dir: Path,
     out_dir: Path,
     by: str = "solver_alias",
     instance_basename: Optional[str] = None,
-    per_instance: bool = True,
+    per_instance: bool = False,
+    per_instance_scores: bool = False,
+    do_leaderboard: bool = True,
+    do_relative_leaderboard: bool = True,
+    do_final_summary: bool = True,
+    do_replicas_by_solver: bool = False,
     t_min: Optional[float] = None,
     t_max: Optional[float] = None,
     t_at: Optional[float] = None,
@@ -1012,24 +1018,21 @@ def generate_basic_reports(
     min_n_instances: Optional[int] = None,
 ) -> dict:
     """
-    - (Re)build trajectories/summary (moyenne par solver×instance)
-    - Leaderboards (classique + relatif)
-    - Trajectoires coût/temps (par instance)
-    - Scores(t) par instance
-    - Average scores over time
-    - Réplicas par solveur
+    Pipeline configurable de génération de rapports.
 
-    Important :
-      - on résout ici une fenêtre temporelle commune ;
-      - cette fenêtre est propagée partout dans le pipeline.
+    Paramètres importants :
+      - per_instance : génère les trajectoires coût/temps par instance
+      - per_instance_scores : génère les scores relatifs par instance
+      - do_leaderboard : leaderboard classique + figures associées
+      - do_relative_leaderboard : leaderboard relatif temporel
+      - do_final_summary : average_scores_over_time / AUC / score_distribution
+      - do_replicas_by_solver : stats et figures des réplicas
     """
     print(f"=== Génération des rapports basiques dans {out_dir} ===")
 
-    # 1) rebuild (moyennes)
     print("Chargement des runs et (re)construction des moyennes...")
     df_traj, df_sum = load_runs(runs_dir)
 
-    # 2) résolution d'un horizon commun
     common_t_min, common_t_max = _resolve_common_time_window(
         df_traj,
         t_min=t_min,
@@ -1038,30 +1041,61 @@ def generate_basic_reports(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 3) Leaderboard simple
-    print("Génération du leaderboard simple...")
-    lb = compute_leaderboard(df_sum, by=by)
-    lb_csv = out_dir / "leaderboard.csv"
-    lb.to_csv(lb_csv, index=False)
-    plot_leaderboard_wins(lb, out_dir / "plot_leaderboard_wins.png", by=by)
-    plot_time_to_best_box(df_sum, out_dir / "plot_time_to_best_box.png", by=by)
+    result = {
+        "t_min": common_t_min,
+        "t_max": common_t_max,
+        "t_at": t_at,
+        "leaderboard_csv": None,
+        "plot_leaderboard_wins": None,
+        "plot_time_to_best_box": None,
+        "leaderboard_relative_csv": None,
+        "plot_trajectory": None,
+        "instance_plots": [],
+        "instance_score_plots": [],
+        "avg_scores_csv": None,
+        "avg_scores_png": None,
+        "auc_scores_csv": None,
+        "auc_scores_png": None,
+        "score_dist_csv": None,
+        "score_dist_png": None,
+        "replicas_by_solver_csv": None,
+        "replicas_by_solver_plots": [],
+    }
 
-    # 4) Leaderboard relatif (fenêtre temporelle commune)
-    print("Génération du leaderboard relatif...")
-    lb_rel = aggregate_relative_leaderboard(
-        df_traj,
-        by=by,
-        t_min=common_t_min,
-        t_max=common_t_max,
-        t_at=t_at,
-    )
-    lb_rel_csv = out_dir / "leaderboard_relative.csv"
-    lb_rel.to_csv(lb_rel_csv, index=False)
+    # 1) Leaderboard simple
+    if do_leaderboard:
+        print("Génération du leaderboard simple...")
+        lb = compute_leaderboard(df_sum, by=by)
+        lb_csv = out_dir / "leaderboard.csv"
+        lb.to_csv(lb_csv, index=False)
 
-    # 5) Trajectoires coût/temps
-    print("Génération des trajectoires coût/temps par instance...")
-    traj_png = None
+        wins_png = out_dir / "plot_leaderboard_wins.png"
+        tbest_png = out_dir / "plot_time_to_best_box.png"
+
+        plot_leaderboard_wins(lb, wins_png, by=by)
+        plot_time_to_best_box(df_sum, tbest_png, by=by)
+
+        result["leaderboard_csv"] = str(lb_csv)
+        result["plot_leaderboard_wins"] = str(wins_png)
+        result["plot_time_to_best_box"] = str(tbest_png)
+
+    # 2) Leaderboard relatif
+    if do_relative_leaderboard:
+        print("Génération du leaderboard relatif...")
+        lb_rel = aggregate_relative_leaderboard(
+            df_traj,
+            by=by,
+            t_min=common_t_min,
+            t_max=common_t_max,
+            t_at=t_at,
+        )
+        lb_rel_csv = out_dir / "leaderboard_relative.csv"
+        lb_rel.to_csv(lb_rel_csv, index=False)
+        result["leaderboard_relative_csv"] = str(lb_rel_csv)
+
+    # 3) Une seule trajectoire ciblée
     if instance_basename:
+        print(f"Génération de la trajectoire ciblée pour {instance_basename}...")
         traj_png = out_dir / f"plot_trajectory_{instance_basename}.png"
         axis_spec = _compute_shared_x_axis_spec(
             df_traj=df_traj,
@@ -1081,9 +1115,12 @@ def generate_basic_reports(
             log_time=log_time,
             axis_spec=axis_spec,
         )
+        result["plot_trajectory"] = str(traj_png)
 
-    instance_cost_plots = (
-        plot_all_instances(
+    # 4) Trajectoires coût/temps par instance
+    if per_instance:
+        print("Génération des trajectoires coût/temps par instance...")
+        result["instance_plots"] = plot_all_instances(
             df_traj,
             out_dir,
             by=by,
@@ -1091,51 +1128,44 @@ def generate_basic_reports(
             t_max=common_t_max,
             log_time=log_time,
         )
-        if per_instance else []
-    )
 
-    # 6) Scores(t) par instance avec horizon commun
-    print("Génération des scores(t) par instance...")
-    instance_score_plots = plot_all_instances_scores(
-        df_traj,
-        out_dir,
-        by=by,
-        t_min=common_t_min,
-        t_max=common_t_max,
-        log_time=log_time,
-    )
+    # 5) Scores(t) par instance
+    if per_instance_scores:
+        print("Génération des scores(t) par instance...")
+        result["instance_score_plots"] = plot_all_instances_scores(
+            df_traj,
+            out_dir,
+            by=by,
+            t_min=common_t_min,
+            t_max=common_t_max,
+            log_time=log_time,
+        )
 
-    # 7) Stats finales temporelles avec le même horizon commun
-    print("Génération des statistiques finales temporelles...")
-    finals = generate_final_score_summary(
-        df_traj,
-        out_dir=out_dir,
-        by=by,
-        t_min=common_t_min,
-        t_max=common_t_max,
-        log_time=log_time,
-        min_n_instances=min_n_instances,
-    )
+    # 6) Stats finales temporelles
+    if do_final_summary:
+        print("Génération des statistiques finales temporelles...")
+        finals = generate_final_score_summary(
+            df_traj,
+            out_dir=out_dir,
+            by=by,
+            t_min=common_t_min,
+            t_max=common_t_max,
+            log_time=log_time,
+            min_n_instances=min_n_instances,
+        )
+        result.update(finals)
 
-    # 8) Réplicas par solveur
-    print("Génération des statistiques de réplicas par solveur...")
-    df_rep_solver = compute_replicas_by_solver_stats(runs_dir, by=by)
-    rep_csv = out_dir / "replicas_by_solver.csv"
-    df_rep_solver.to_csv(rep_csv, index=False)
-    rep_solver_plots = plot_replicas_by_solver_gallery(df_rep_solver, out_dir, by=by)
+    # 7) Réplicas par solveur
+    if do_replicas_by_solver:
+        print("Génération des statistiques de réplicas par solveur...")
+        df_rep_solver = compute_replicas_by_solver_stats(runs_dir, by=by)
+        rep_csv = out_dir / "replicas_by_solver.csv"
+        df_rep_solver.to_csv(rep_csv, index=False)
+        rep_solver_plots = plot_replicas_by_solver_gallery(df_rep_solver, out_dir, by=by)
 
-    return {
-        "leaderboard_csv": str(lb_csv),
-        "plot_leaderboard_wins": str(out_dir / "plot_leaderboard_wins.png"),
-        "plot_time_to_best_box": str(out_dir / "plot_time_to_best_box.png"),
-        "plot_trajectory": (str(traj_png) if traj_png else None),
-        "instance_plots": instance_cost_plots,
-        "leaderboard_relative_csv": str(lb_rel_csv),
-        "instance_score_plots": instance_score_plots,
-        "t_min": common_t_min,
-        "t_max": common_t_max,
-        "t_at": t_at,
-        **finals,
-        "replicas_by_solver_csv": str(rep_csv),
-        "replicas_by_solver_plots": rep_solver_plots,
-    }
+        result["replicas_by_solver_csv"] = str(rep_csv)
+        result["replicas_by_solver_plots"] = rep_solver_plots
+
+    return result
+
+

@@ -382,8 +382,8 @@ def plot_leaderboard_wins(leaderboard: pd.DataFrame, out_png: Path, by: str = "s
     bars = plt.bar(lb[by].astype(str), lb["wins"])
     # légère amélioration de lisibilité
     plt.xticks(rotation=45, ha="right")
-    plt.ylabel("Wins (final_cost minimal)")
-    plt.title("Leaderboard (wins par solver)")
+    plt.ylabel("Victoires (cout final minimal)")
+    plt.title("Classement par victoires")
     plt.tight_layout()
     _savefig(out_png)
 

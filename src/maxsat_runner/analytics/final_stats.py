@@ -690,6 +690,179 @@ def plot_auc_scores_table(
     plt.close(fig)
 
 # ============ 5) Plot + CSV + Driver ============
+def _compute_robust_score_ylim(
+    scores: pd.Series,
+    q_low: float = 0.05,
+    q_high: float = 1,
+    min_span: float = 0.01,
+    pad_ratio: float = 0.10,
+) -> tuple[float, float]:
+    """
+    Calcule des bornes Y robustes à partir des quantiles.
+    Les bornes restent dans [0, 1].
+    """
+    vals = pd.to_numeric(scores, errors="coerce")
+    vals = vals[np.isfinite(vals.to_numpy(dtype=float))]
+    if vals.empty:
+        return (0.0, 1.0)
+
+    y_lo = float(vals.quantile(q_low))
+    y_hi = float(vals.quantile(q_high))
+
+    # sécurité si quantiles trop proches
+    if y_hi < y_lo:
+        y_lo, y_hi = y_hi, y_lo
+
+    span = y_hi - y_lo
+    if span < min_span:
+        mid = 0.5 * (y_lo + y_hi)
+        half = 0.5 * min_span
+        y_lo = mid - half
+        y_hi = mid + half
+        span = y_hi - y_lo
+
+    pad = max(0.2, pad_ratio * span)
+
+    y_lo = max(0.0, y_lo - pad)
+    y_hi = min(1.0, y_hi + pad)
+
+    # si jamais ça reste trop serré
+    if y_hi - y_lo < min_span:
+        mid = 0.5 * (y_lo + y_hi)
+        half = 0.5 * min_span
+        y_lo = max(0.0, mid - half)
+        y_hi = min(1.0, mid + half)
+
+    return (y_lo, 1.002)
+
+def plot_avg_scores_over_time_zoomed_robust(
+    ts_df: pd.DataFrame,
+    out_png: Path,
+    by: str = "solver_alias",
+    log_time: bool = False,
+    q_low: float = 0.05,
+    q_high: float = 1,
+) -> None:
+    """
+    Deuxième plot : même courbe que plot_avg_scores_over_time,
+    mais avec un zoom Y robuste basé sur les quantiles.
+    """
+    if ts_df.empty:
+        return
+
+    plt.figure(figsize=(16, 10), dpi=150)
+    ax = plt.gca()
+
+    valid = ts_df.loc[~ts_df["avg_score"].isna()].copy()
+    if valid.empty:
+        plt.close()
+        return
+
+    xs_all = valid["t"].astype(float).to_numpy()
+    use_log = False
+    use_log1p = False
+    if log_time:
+        if np.any(xs_all <= 0.0):
+            use_log1p = True
+        else:
+            use_log = True
+
+    raw_x_min = None
+    raw_x_max = None
+
+    def xmap(x: np.ndarray) -> np.ndarray:
+        if use_log1p:
+            return np.log1p(x)
+        return x
+
+    for s, g in ts_df.groupby(by):
+        g = g.sort_values("t")
+        g = g[~g["avg_score"].isna()]
+        if g.empty:
+            continue
+
+        xs = g["t"].astype(float).to_numpy()
+        ys = g["avg_score"].astype(float).to_numpy()
+
+        raw_x_min = float(xs.min()) if raw_x_min is None else min(raw_x_min, float(xs.min()))
+        raw_x_max = float(xs.max()) if raw_x_max is None else max(raw_x_max, float(xs.max()))
+
+        xs_plot = xmap(xs)
+        line, = ax.step(xs_plot, ys, where="post", linewidth=1.0, label=str(s))
+        ax.plot(xs_plot, ys, ".", linewidth=0, color=line.get_color())
+
+    # même transformation Y que le plot principal
+    BETA = 0.4
+    MARGIN = 0.05
+
+    def y_forward(y):
+        y = np.asarray(y, dtype=float)
+        out = np.empty_like(y)
+
+        mask_mid = (y >= 0.0) & (y <= 1.0)
+        out[mask_mid] = 1.0 - (1.0 - y[mask_mid]) ** BETA
+
+        mask_low = (y < 0.0)
+        out[mask_low] = y[mask_low] * (0.1 / MARGIN)
+
+        mask_high = (y > 1.0)
+        out[mask_high] = 1.0 + (y[mask_high] - 1.0) * (0.1 / MARGIN)
+
+        return out
+
+    def y_inverse(z):
+        z = np.asarray(z, dtype=float)
+        out = np.empty_like(z)
+
+        mask_mid = (z >= 0.0) & (z <= 1.0)
+        out[mask_mid] = 1.0 - (1.0 - z[mask_mid]) ** (1.0 / BETA)
+
+        mask_low = (z < 0.0)
+        out[mask_low] = z[mask_low] * (MARGIN / 0.1)
+
+        mask_high = (z > 1.0)
+        out[mask_high] = 1.0 + (z[mask_high] - 1.0) * (MARGIN / 0.1)
+
+        return out
+
+    ax.set_yscale("function", functions=(y_forward, y_inverse))
+
+    y_lo, y_hi = _compute_robust_score_ylim(
+        valid["avg_score"],
+        q_low=q_low,
+        q_high=q_high,
+        min_span=0.01,
+        pad_ratio=0.10,
+    )
+    ax.set_ylim(y_lo, y_hi)
+
+    # ticks adaptés à la fenêtre zoomée
+    candidate_ticks = np.array([
+        0.0, 0.2, 0.4, 0.6, 0.8,
+        0.9, 0.92, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99, 1.0
+    ])
+    ticks = candidate_ticks[(candidate_ticks >= y_lo - 1e-12) & (candidate_ticks <= y_hi + 1e-12)]
+
+    # sécurité si la fenêtre est très spéciale
+    if len(ticks) < 3:
+        ticks = np.linspace(y_lo, y_hi, 5)
+
+    ax.yaxis.set_major_locator(FixedLocator(ticks))
+    ax.yaxis.set_major_formatter(FormatStrFormatter("%.3f"))
+    ax.grid(True, which="both", alpha=0.25)
+    ax.set_ylabel("Average relative score (best/cost)")
+
+    _apply_time_axis_with_right_margin(
+        ax=ax,
+        raw_x_min=raw_x_min,
+        raw_x_max=raw_x_max,
+        use_log=use_log,
+        use_log1p=use_log1p,
+    )
+
+    ax.set_title(f"Average scores over time (zoom: [{y_lo:.3f}, {y_hi:.3f}])")
+    _legend_bottom()
+    _savefig(out_png)
 
 def plot_avg_scores_over_time(
     ts_df: pd.DataFrame,
@@ -974,6 +1147,10 @@ def generate_final_score_summary(
     out_png = out_dir / "average_scores_over_time.png"
     save_avg_scores_csv(ts, out_csv)
     plot_avg_scores_over_time(ts, out_png, by=by, log_time=log_time)
+    
+
+    plot_avg_scores_over_time_zoomed_robust(
+    ts_df=ts,out_png=out_dir / "average_scores_over_time_zoomed_robust.png",by=by,log_time=log_time)
 
     auc_df = compute_auc_scores(ts, by=by)
     auc_csv = out_dir / "auc_scores_over_time.csv"

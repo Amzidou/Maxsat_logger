@@ -134,7 +134,7 @@ async def api_run(body: Dict, background: BackgroundTasks):
 @api.get("/status/{job_id}")
 def api_status(job_id: str):
     if job_id not in JOBS:
-        return JSONResponse({"ok": False, "error": "job introuvable"}, status_code=404)
+        return JSONResponse({"ok": False, "error": "tâche introuvable"}, status_code=404)
     info = JOBS[job_id]
     return {"ok": True, "job_id": job_id, "status": info["status"], "result": info["result"]}
 
@@ -158,13 +158,13 @@ def api_stats(body: Dict):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
     try:
-        print(f"=== Stats: generating reports ===")
+        print("=== Statistiques : génération des rapports ===")
         res = generate_basic_reports(
             runs_p, out_p, by=by, instance_basename=instance,
             t_min=t_min, t_max=t_max, t_at=t_at,
             log_time=log_time
         )
-        print(f"=== Stats: reports generated ===")
+        print("=== Statistiques : rapports générés ===")
     except Exception as ex:
         return JSONResponse({"ok": False, "error": str(ex)}, status_code=400)
 
@@ -179,6 +179,8 @@ def api_stats(body: Dict):
         "leaderboard_relative_csv_url": u(res["leaderboard_relative_csv"]),
         "avg_scores_csv_url": _path_to_data_url(Path(res["avg_scores_csv"])) if res.get("avg_scores_csv") else None,
         "avg_scores_png_url": _path_to_data_url(Path(res["avg_scores_png"])) if res.get("avg_scores_png") else None,
+        "avg_cost_csv_url": _path_to_data_url(Path(res["avg_cost_csv"])) if res.get("avg_cost_csv") else None,
+        "avg_cost_png_url": _path_to_data_url(Path(res["avg_cost_png"])) if res.get("avg_cost_png") else None,
         "score_dist_csv_url": _path_to_data_url(Path(res["score_dist_csv"])) if res.get("score_dist_csv") else None,
         "score_dist_png_url": _path_to_data_url(Path(res["score_dist_png"])) if res.get("score_dist_png") else None,
         "replicas_by_solver_csv_url": u(res.get("replicas_by_solver_csv")),
@@ -221,14 +223,14 @@ def api_clusters(body: Dict):
     valid_metrics = {"spearman", "pearson", "cosine", "l2", "euclidean", "manhattan", "l1", "dtw"}
     if metric not in valid_metrics:
         return JSONResponse(
-            {"ok": False, "error": f"Métrique invalide: {metric}. Autorisées: {sorted(valid_metrics)}"},
+            {"ok": False, "error": f"Métrique invalide : {metric}. Valeurs autorisées : {sorted(valid_metrics)}"},
             status_code=400
         )
 
     valid_sampling = {"linear", "log","geom"}
     if sampling not in valid_sampling:
         return JSONResponse(
-            {"ok": False, "error": f"Sampling invalide: {sampling}. Autorisés: {sorted(valid_sampling)}"},
+            {"ok": False, "error": f"Échantillonnage invalide : {sampling}. Valeurs autorisées : {sorted(valid_sampling)}"},
             status_code=400
         )
     if sampling == "log" and ratio <= 0:

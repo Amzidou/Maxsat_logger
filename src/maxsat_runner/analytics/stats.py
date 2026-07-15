@@ -382,7 +382,7 @@ def plot_leaderboard_wins(leaderboard: pd.DataFrame, out_png: Path, by: str = "s
     bars = plt.bar(lb[by].astype(str), lb["wins"])
     # légère amélioration de lisibilité
     plt.xticks(rotation=45, ha="right")
-    plt.ylabel("Victoires (cout final minimal)")
+    plt.ylabel("Victoires (coût final minimal)")
     plt.title("Classement par victoires")
     plt.tight_layout()
     _savefig(out_png)
@@ -398,8 +398,8 @@ def plot_time_to_best_box(df_sum: pd.DataFrame, out_png: Path, by: str = "solver
     labels = [str(k) for k, _ in grouped]
     b = plt.boxplot(data, tick_labels=labels, showfliers=False)
     plt.xticks(rotation=45, ha="right")
-    plt.ylabel("Time to best (sec)")
-    plt.title("Temps au meilleur (distribution)")
+    plt.ylabel("Temps pour atteindre le meilleur coût (s)")
+    plt.title("Distribution du temps pour atteindre le meilleur coût")
     plt.tight_layout()
     _savefig(out_png)
 
@@ -463,7 +463,7 @@ def _apply_x_mapping(ax: plt.Axes, x_min: float, x_max: float, use_log: bool, us
         ax.xaxis.set_major_locator(mtick.LogLocator(base=10))
         ax.xaxis.set_minor_locator(mtick.LogLocator(base=10, subs=np.arange(2, 10) * 0.1))
         ax.xaxis.set_minor_formatter(mtick.NullFormatter())
-        ax.set_xlabel("Elapsed (sec, log)")
+        ax.set_xlabel("Temps écoulé (s, échelle logarithmique)")
         return
 
     # Cas linéaire ou log1p
@@ -475,10 +475,10 @@ def _apply_x_mapping(ax: plt.Axes, x_min: float, x_max: float, use_log: bool, us
         # on garde une petite marge avant 0 sans casser log1p
         left_raw = max(left_raw, -0.5)
         ax.set_xlim(np.log1p(left_raw), np.log1p(right_raw))
-        ax.set_xlabel("log1p(Elapsed sec)")
+        ax.set_xlabel("log1p du temps écoulé (s)")
     else:
         ax.set_xlim(left_raw, right_raw)
-        ax.set_xlabel("Elapsed (sec)")
+        ax.set_xlabel("Temps écoulé (s)")
 
 def _compute_shared_x_axis_spec(
     df_traj: pd.DataFrame,
@@ -652,7 +652,7 @@ def plot_trajectory_for_instance(
         pad_y = max(1.0, 0.02 * (abs(base) + 1.0))
         ax.set_ylim(base - pad_y, base + pad_y)
 
-    ax.set_ylabel("Cost")
+    ax.set_ylabel("Coût")
     ax.set_title(f"Trajectoires – {instance_basename}")
     _legend_bottom()
     _savefig(out_png)
@@ -798,7 +798,7 @@ def plot_scores_for_instance(
     ax.set_ylim(-MARGIN, 1.0 + MARGIN)
     ax.yaxis.set_major_locator(FixedLocator([0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.95, 0.98, 0.99, 1.0]))
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-    ax.set_ylabel("Relative score (best/cost)")
+    ax.set_ylabel("Score relatif (meilleur coût / coût)")
     ax.grid(True, which="both", alpha=0.25)
 
     _apply_x_mapping(ax, x_min, x_max, use_log=use_log, use_log1p=use_log1p)
@@ -988,8 +988,8 @@ def plot_replicas_by_solver_gallery(
         plt.figure(figsize=(max(8, 0.5*len(vals)), 4.8), dpi=150)
         bars = plt.bar(xs, vals, yerr=errs, capsize=3)
         plt.xticks(xs, labels, rotation=45, ha="right")
-        plt.ylabel("Final cost (mean ± std)")
-        plt.title(f"Replicas – {by}={solver}")
+        plt.ylabel("Coût final (moyenne ± écart-type)")
+        plt.title(f"Répétitions – {by}={solver}")
         plt.tight_layout()
         png = out_dir / f"replicas_{by}_{str(solver).replace('/', '_').replace(' ', '_')}.png"
         _savefig(png)
@@ -1028,9 +1028,9 @@ def generate_basic_reports(
       - do_final_summary : average_scores_over_time / AUC / score_distribution
       - do_replicas_by_solver : stats et figures des réplicas
     """
-    print(f"=== Génération des rapports basiques dans {out_dir} ===")
+    print(f"=== Génération des rapports dans {out_dir} ===")
 
-    print("Chargement des runs et (re)construction des moyennes...")
+    print("Chargement des exécutions et reconstruction des moyennes...")
     df_traj, df_sum = load_runs(runs_dir)
 
     common_t_min, common_t_max = _resolve_common_time_window(
@@ -1054,6 +1054,8 @@ def generate_basic_reports(
         "instance_score_plots": [],
         "avg_scores_csv": None,
         "avg_scores_png": None,
+        "avg_cost_csv": None,
+        "avg_cost_png": None,
         "auc_scores_csv": None,
         "auc_scores_png": None,
         "score_dist_csv": None,
@@ -1064,7 +1066,7 @@ def generate_basic_reports(
 
     # 1) Leaderboard simple
     if do_leaderboard:
-        print("Génération du leaderboard simple...")
+        print("Génération du classement général...")
         lb = compute_leaderboard(df_sum, by=by)
         lb_csv = out_dir / "leaderboard.csv"
         lb.to_csv(lb_csv, index=False)
@@ -1081,7 +1083,7 @@ def generate_basic_reports(
 
     # 2) Leaderboard relatif
     if do_relative_leaderboard:
-        print("Génération du leaderboard relatif...")
+        print("Génération du classement relatif...")
         lb_rel = aggregate_relative_leaderboard(
             df_traj,
             by=by,
@@ -1157,7 +1159,7 @@ def generate_basic_reports(
 
     # 7) Réplicas par solveur
     if do_replicas_by_solver:
-        print("Génération des statistiques de réplicas par solveur...")
+        print("Génération des statistiques des répétitions par solveur...")
         df_rep_solver = compute_replicas_by_solver_stats(runs_dir, by=by)
         rep_csv = out_dir / "replicas_by_solver.csv"
         df_rep_solver.to_csv(rep_csv, index=False)

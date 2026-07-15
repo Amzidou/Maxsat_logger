@@ -11,7 +11,7 @@ from .core.campaign import run_single_instance
 from .analytics.stats import generate_basic_reports
 from .analytics.similarities import generate_clusters
 
-app = typer.Typer(help="Orchestration MaxSAT: CLI & serveur API + UI")
+app = typer.Typer(help="Orchestration MaxSAT : interface en ligne de commande, API et interface utilisateur")
 
 def _parse_solver_arg(s: str) -> Tuple[Optional[str], str]:
     s = s.strip()
@@ -26,8 +26,8 @@ def cli_run(
     solver: List[str] = typer.Option(..., "--solver", help="Commande (répétable), optionnellement alias=CMD, doit contenir {inst}"),
     instances: str = typer.Option(..., "--instances", help="Dossier d'instances"),
     pattern: str = typer.Option(".wcnf", "--pattern", help="Extension à filtrer (ex: .wcnf)"),
-    out: str = typer.Option("./runs", "--out", help="Dossier de sortie (contiendra logs/ + CSV agrégés)"),
-    timeout_sec: Optional[int] = typer.Option(None, "--timeout-sec", help="Timeout par run (secondes)"),
+    out: str = typer.Option("./runs", "--out", help="Dossier de sortie (contiendra les journaux et les fichiers CSV agrégés)"),
+    timeout_sec: Optional[int] = typer.Option(None, "--timeout-sec", help="Délai maximal par exécution (secondes)"),
 ):
     pairs = []
     for s in solver:
@@ -57,8 +57,8 @@ def cli_run_one(
     solver_alias: str = typer.Option(..., "--solver-alias", help="Alias du solveur"),
     cmd: str = typer.Option(..., "--cmd", help="Commande du solveur, doit contenir {inst}"),
     instance: str = typer.Option(..., "--instance", help="Chemin de l'instance"),
-    out: str = typer.Option("./runs", "--out", help="Dossier de sortie des logs"),
-    timeout_sec: Optional[int] = typer.Option(None, "--timeout-sec", help="Timeout du run (secondes)"),
+    out: str = typer.Option("./runs", "--out", help="Dossier de sortie des journaux"),
+    timeout_sec: Optional[int] = typer.Option(None, "--timeout-sec", help="Délai maximal de l’exécution (secondes)"),
 ):
     """
     Exécute un seul run : 1 solveur x 1 instance.
@@ -77,7 +77,7 @@ def cli_run_one(
     if "{inst}" not in cmd:
         typer.echo(json.dumps({
             "ok": False,
-            "error": "La commande du solveur doit contenir le placeholder {inst}"
+            "error": "La commande du solveur doit contenir le marqueur {inst}"
         }, ensure_ascii=False, indent=2))
         raise typer.Exit(code=1)
 
@@ -106,17 +106,17 @@ def cli_stats(
     runs: str = typer.Option("data/runs", "--runs", help="Dossier contenant trajectories.csv/summary.csv"),
     out: str  = typer.Option("data/reports", "--out", help="Dossier de sortie pour rapports/PNGs"),
     by: str   = typer.Option("solver_alias", "--by", help="Clé d'agrégation (solver_alias|solver_cmd|solver_tag)"),
-    instance: Optional[str] = typer.Option(None, "--instance", help="Basename d'une instance pour tracer la trajectoire"),
+    instance: Optional[str] = typer.Option(None, "--instance", help="Nom de fichier d’une instance pour tracer la trajectoire"),
     t_min: Optional[float] = typer.Option(None, "--t-min", help="Borne inférieure de temps (sec)"),
     t_max: Optional[float] = typer.Option(None, "--t-max", help="Borne supérieure de temps (sec)"),
-    t_at: Optional[float]  = typer.Option(None, "--t-at", help="Snapshot à t_at (leaderboard relatif)"),
+    t_at: Optional[float]  = typer.Option(None, "--t-at", help="Instantané à t_at pour le classement relatif"),
     log_time: bool = typer.Option(False, "--log-time", help="Axe du temps en échelle logarithmique"),
     per_instance: bool = typer.Option(False, "--per-instance", help="Génère les trajectoires coût/temps par instance"),
     per_instance_scores: bool = typer.Option(False, "--per-instance-scores", help="Génère les scores relatifs par instance"),
-    do_leaderboard: bool = typer.Option(False, "--do-leaderboard/--no-leaderboard", help="Génère le leaderboard classique"),
-    do_relative_leaderboard: bool = typer.Option(False, "--do-relative-leaderboard/--no-relative-leaderboard", help="Génère le leaderboard relatif"),
-    do_final_summary: bool = typer.Option(True, "--do-final-summary/--no-final-summary", help="Génère les stats temporelles finales"),
-    do_replicas_by_solver: bool = typer.Option(False, "--do-replicas-by-solver", help="Génère les stats de réplicas par solveur"),
+    do_leaderboard: bool = typer.Option(False, "--do-leaderboard/--no-leaderboard", help="Génère le classement général"),
+    do_relative_leaderboard: bool = typer.Option(False, "--do-relative-leaderboard/--no-relative-leaderboard", help="Génère le classement relatif"),
+    do_final_summary: bool = typer.Option(True, "--do-final-summary/--no-final-summary", help="Génère les statistiques temporelles finales"),
+    do_replicas_by_solver: bool = typer.Option(False, "--do-replicas-by-solver", help="Génère les statistiques des répétitions par solveur"),
     min_n_instances: Optional[int] = typer.Option(None, "--min-n-instances", help="Nombre minimal d'instances pour garder un point temporel"),
 ):
     try:
@@ -151,17 +151,17 @@ def cli_clusters(
         "spearman", "--metric",
         help="Métrique de distance: spearman|pearson|cosine|l2|manhattan|dtw"
     ),
-    k: int = typer.Option(2, "--k", help="Nombre de clusters"),
+    k: int = typer.Option(2, "--k", help="Nombre de groupes"),
     t_min: Optional[float] = typer.Option(None, "--t-min", help="Borne inférieure de temps (sec)"),
     t_max: Optional[float] = typer.Option(None, "--t-max", help="Borne supérieure de temps (sec)"),
     T: int = typer.Option(100, "--T", help="Nombre de points de discrétisation des courbes"),
     sampling: str = typer.Option(
         "linear", "--sampling",
-        help="Schéma d’échantillonnage: linear|log (log sur-pondère le début)"
+        help="Méthode d’échantillonnage : linear|log (log surpondère le début)"
     ),
     ratio: float = typer.Option(
         1.10, "--ratio",
-       help="Intensité du front-loading quand --sampling=log (ratio>1 → plus de poids au début)"
+       help="Intensité de la surpondération du début avec --sampling=log (ratio > 1 donne plus de poids au début)"
     ),
 ):
     try:
@@ -173,7 +173,7 @@ def cli_clusters(
         if metric not in valid_metrics:
             typer.echo(json.dumps({
                 "ok": False,
-                "error": f"Métrique invalide: {metric}. Autorisées: {sorted(valid_metrics)}"
+                "error": f"Métrique invalide : {metric}. Valeurs autorisées : {sorted(valid_metrics)}"
             }, ensure_ascii=False, indent=2))
             raise typer.Exit(code=1)
 
@@ -181,7 +181,7 @@ def cli_clusters(
         if sampling not in valid_sampling:
             typer.echo(json.dumps({
                 "ok": False,
-                "error": f"Sampling invalide: {sampling}. Autorisés: {sorted(valid_sampling)}"
+                "error": f"Échantillonnage invalide : {sampling}. Valeurs autorisées : {sorted(valid_sampling)}"
             }, ensure_ascii=False, indent=2))
             raise typer.Exit(code=1)
 

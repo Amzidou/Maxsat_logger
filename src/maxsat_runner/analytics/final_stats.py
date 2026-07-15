@@ -104,7 +104,7 @@ def _apply_time_axis_with_right_margin(
         ax.xaxis.set_major_locator(mtick.LogLocator(base=10))
         ax.xaxis.set_minor_locator(mtick.LogLocator(base=10, subs=np.arange(2, 10) * 0.1))
         ax.xaxis.set_minor_formatter(mtick.NullFormatter())
-        ax.set_xlabel("Elapsed (sec, log)")
+        ax.set_xlabel("Temps écoulé (s, échelle logarithmique)")
         return
 
     span = max(1e-12, raw_x_max - raw_x_min)
@@ -114,10 +114,10 @@ def _apply_time_axis_with_right_margin(
     if use_log1p:
         left_raw = max(left_raw, -0.5)
         ax.set_xlim(np.log1p(left_raw), np.log1p(right_raw))
-        ax.set_xlabel("log1p(Elapsed sec)")
+        ax.set_xlabel("log1p du temps écoulé (s)")
     else:
         ax.set_xlim(left_raw, right_raw)
-        ax.set_xlabel("Elapsed (sec)")
+        ax.set_xlabel("Temps écoulé (s)")
 
 
 def _short_solver_name(name: str) -> str:
@@ -245,10 +245,16 @@ def _compute_time_stats_over_time(
     segments_df: pd.DataFrame,
     by: str = "solver_alias",
     min_n_instances: Optional[int] = None,
+    value_col: str = "score",
+    clip_to_unit_interval: bool = True,
 ) -> pd.DataFrame:
     """
     Retourne un DataFrame long avec colonnes :
     ['t', by, 'mean', 'min', 'max', 'n_instances'].
+
+    La colonne agrégée est définie par ``value_col``. Pour les scores,
+    ``clip_to_unit_interval=True`` conserve les valeurs dans [0, 1].
+    Pour les coûts, aucun clipping ne doit être appliqué.
 
     Version plus légère :
       - évite plusieurs copies inutiles ;
@@ -262,7 +268,7 @@ def _compute_time_stats_over_time(
     if segments_df.empty:
         return pd.DataFrame(columns=empty_cols)
 
-    required = {"instance", "t_start", "t_end", "score"}
+    required = {"instance", "t_start", "t_end", value_col}
     missing = required - set(segments_df.columns)
     if missing:
         raise KeyError(f"Colonnes manquantes: {sorted(missing)}")
@@ -271,7 +277,7 @@ def _compute_time_stats_over_time(
     if label_col is None:
         raise KeyError(f"Aucune colonne '{by}' ni 'solver' trouvée dans segments_df.")
 
-    cols = ["instance", "t_start", "t_end", "score", label_col]
+    cols = ["instance", "t_start", "t_end", value_col, label_col]
     seg = segments_df.loc[:, cols].copy()
 
     if "basename" in segments_df.columns:
@@ -281,13 +287,18 @@ def _compute_time_stats_over_time(
 
     seg["t_start"] = pd.to_numeric(seg["t_start"], errors="coerce")
     seg["t_end"] = pd.to_numeric(seg["t_end"], errors="coerce")
-    seg["score"] = pd.to_numeric(seg["score"], errors="coerce").map(_clip_score)
+    seg["_value"] = pd.to_numeric(seg[value_col], errors="coerce")
+    if clip_to_unit_interval:
+        seg["_value"] = seg["_value"].map(_clip_score)
+    else:
+        finite_values = np.isfinite(seg["_value"].to_numpy(dtype=float))
+        seg.loc[~finite_values, "_value"] = np.nan
 
     seg = seg[
         seg["t_start"].notna()
         & seg["t_end"].notna()
         & (seg["t_end"] > seg["t_start"])
-        & seg["score"].notna()
+        & seg["_value"].notna()
     ]
 
     if seg.empty:
@@ -315,7 +326,7 @@ def _compute_time_stats_over_time(
         starts = g["t_start"].to_numpy(dtype=float, copy=False)
         ends = g["t_end"].to_numpy(dtype=float, copy=False)
         instances = g["basename"].astype(str).to_numpy(copy=False)
-        scores = g["score"].to_numpy(dtype=float, copy=False)
+        values = g["_value"].to_numpy(dtype=float, copy=False)
 
         i0 = np.searchsorted(T, starts, side="left")
         i1 = np.searchsorted(T, ends, side="left")
@@ -327,13 +338,13 @@ def _compute_time_stats_over_time(
         i0 = i0[valid]
         i1 = i1[valid]
         instances = instances[valid]
-        scores = scores[valid]
+        values = values[valid]
 
         # Événements clairsemés au lieu d'une liste de longueur n_intervals
         start_events: Dict[int, List[Tuple[str, float]]] = {}
         end_events: Dict[int, List[str]] = {}
 
-        for start_idx, end_idx, inst, sc in zip(i0, i1, instances, scores):
+        for start_idx, end_idx, inst, sc in zip(i0, i1, instances, values):
             if 0 <= start_idx < n_intervals:
                 start_events.setdefault(int(start_idx), []).append((str(inst), float(sc)))
             if 0 <= end_idx < n_intervals:
@@ -481,6 +492,34 @@ def compute_avg_scores_over_time(
     return (
         stats[["t", by, "mean", "n_instances"]]
         .rename(columns={"mean": "avg_score"})
+        .reset_index(drop=True)
+    )
+
+
+def compute_avg_cost_over_time(
+    segments_df: pd.DataFrame,
+    by: str = "solver_alias",
+    min_n_instances: Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    DataFrame long : ['t', by, 'avg_cost', 'n_instances'].
+
+    À chaque intervalle temporel, le coût moyen est calculé sur les
+    instances qui possèdent un coût défini pour le solveur concerné.
+    """
+    stats = _compute_time_stats_over_time(
+        segments_df,
+        by=by,
+        min_n_instances=min_n_instances,
+        value_col="cost",
+        clip_to_unit_interval=False,
+    )
+    if stats.empty:
+        return pd.DataFrame(columns=["t", by, "avg_cost", "n_instances"])
+
+    return (
+        stats[["t", by, "mean", "n_instances"]]
+        .rename(columns={"mean": "avg_cost"})
         .reset_index(drop=True)
     )
 
@@ -637,7 +676,7 @@ def plot_auc_scores_table(
     disp[by] = disp[by].map(lambda x: _short_solver_name(str(x)))
 
     disp = disp.rename(columns={
-        by: "Solver",
+        by: "Solveur",
         "auc_linear": "AUC",
         "sdt": "SDT",
         "auc_log": "AUC-log",
@@ -651,13 +690,13 @@ def plot_auc_scores_table(
     n_cols = len(disp.columns)
 
     # largeur un peu plus grande si les noms de solveurs sont longs
-    max_solver_len = disp["Solver"].astype(str).map(len).max() if not disp.empty else 10
+    max_solver_len = disp["Solveur"].astype(str).map(len).max() if not disp.empty else 10
     fig_width = max(10.5, min(16, 8 + 0.12 * max_solver_len))
     fig_height = max(2.8, 0.55 * (n_rows + 1))
 
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=150)
     ax.axis("off")
-    ax.set_title("Temporal domination metrics (AUC / SDT)", fontsize=13, pad=12)
+    ax.set_title("Mesures de domination temporelle (AUC / SDT)", fontsize=13, pad=12)
 
     table = ax.table(
         cellText=disp.values.tolist(),
@@ -678,7 +717,7 @@ def plot_auc_scores_table(
         pass
 
     # Aligner la colonne Solver à gauche pour améliorer la lisibilité
-    solver_col_idx = list(disp.columns).index("Solver")
+    solver_col_idx = list(disp.columns).index("Solveur")
     for (row, col), cell in table.get_celld().items():
         if row == 0:
             cell.set_text_props(weight="bold")
@@ -850,7 +889,7 @@ def plot_avg_scores_over_time_zoomed_robust(
     ax.yaxis.set_major_locator(FixedLocator(ticks))
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.3f"))
     ax.grid(True, which="both", alpha=0.25)
-    ax.set_ylabel("Average relative score (best/cost)")
+    ax.set_ylabel("Score relatif moyen (meilleur coût / coût)")
 
     _apply_time_axis_with_right_margin(
         ax=ax,
@@ -860,7 +899,7 @@ def plot_avg_scores_over_time_zoomed_robust(
         use_log1p=use_log1p,
     )
 
-    ax.set_title(f"Average scores over time (zoom: [{y_lo:.3f}, {y_hi:.3f}])")
+    ax.set_title(f"Scores relatifs moyens au fil du temps (zoom : [{y_lo:.3f}, {y_hi:.3f}])")
     _legend_bottom()
     _savefig(out_png)
 
@@ -949,7 +988,7 @@ def plot_avg_scores_over_time(
     ax.yaxis.set_major_locator(FixedLocator([0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.95, 0.98, 0.99, 1.0]))
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
     ax.grid(True, which="both", alpha=0.25)
-    ax.set_ylabel("Average relative score (best/cost)")
+    ax.set_ylabel("Score relatif moyen (meilleur coût / coût)")
 
     _apply_time_axis_with_right_margin(
         ax=ax,
@@ -959,7 +998,7 @@ def plot_avg_scores_over_time(
         use_log1p=use_log1p,
     )
 
-    ax.set_title("Average scores over time (per solver)")
+    ax.set_title("Scores relatifs moyens au fil du temps (par solveur)")
     _legend_bottom()
     _savefig(out_png)
 
@@ -969,7 +1008,76 @@ def save_avg_scores_csv(ts_df: pd.DataFrame, out_csv: Path) -> None:
     ts_df.to_csv(out_csv, index=False)
 
 
-# ============ 6) Plot distribution (mean + min–max) ============
+# ============ 6) Plot du coût moyen ============
+
+def plot_avg_cost_over_time(
+    cost_ts_df: pd.DataFrame,
+    out_png: Path,
+    by: str = "solver_alias",
+    log_time: bool = False,
+) -> None:
+    """Trace le coût moyen au cours du temps pour chaque solveur."""
+    if cost_ts_df.empty:
+        return
+
+    valid = cost_ts_df.loc[~cost_ts_df["avg_cost"].isna()].copy()
+    if valid.empty:
+        return
+
+    plt.figure(figsize=(16, 10), dpi=150)
+    ax = plt.gca()
+
+    xs_all = valid["t"].astype(float).to_numpy()
+    use_log = False
+    use_log1p = False
+    if log_time:
+        if np.any(xs_all <= 0.0):
+            use_log1p = True
+        else:
+            use_log = True
+
+    raw_x_min = None
+    raw_x_max = None
+
+    def xmap(x: np.ndarray) -> np.ndarray:
+        return np.log1p(x) if use_log1p else x
+
+    for solver_name, group in valid.groupby(by):
+        group = group.sort_values("t")
+        xs = group["t"].astype(float).to_numpy()
+        ys = group["avg_cost"].astype(float).to_numpy()
+        if xs.size == 0:
+            continue
+
+        raw_x_min = float(xs.min()) if raw_x_min is None else min(raw_x_min, float(xs.min()))
+        raw_x_max = float(xs.max()) if raw_x_max is None else max(raw_x_max, float(xs.max()))
+
+        xs_plot = xmap(xs)
+        line, = ax.step(xs_plot, ys, where="post", linewidth=1.0, label=str(solver_name))
+        ax.plot(xs_plot, ys, ".", linewidth=0, color=line.get_color())
+
+    ax.grid(True, which="both", alpha=0.25)
+    ax.set_ylabel("Coût moyen")
+
+    _apply_time_axis_with_right_margin(
+        ax=ax,
+        raw_x_min=raw_x_min,
+        raw_x_max=raw_x_max,
+        use_log=use_log,
+        use_log1p=use_log1p,
+    )
+
+    ax.set_title("Coût moyen au fil du temps (par solveur)")
+    _legend_bottom()
+    _savefig(out_png)
+
+
+def save_avg_cost_csv(cost_ts_df: pd.DataFrame, out_csv: Path) -> None:
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    cost_ts_df.to_csv(out_csv, index=False)
+
+
+# ============ 7) Plot distribution (mean + min–max) ============
 
 def plot_score_distribution_over_time(
     dist_df: pd.DataFrame,
@@ -1076,7 +1184,7 @@ def plot_score_distribution_over_time(
     ax.yaxis.set_major_locator(FixedLocator([0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.95, 0.98, 0.99, 1.0]))
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
     ax.grid(True, which="both", alpha=0.25)
-    ax.set_ylabel("Relative score (mean with min–max band)")
+    ax.set_ylabel("Score relatif (moyenne avec intervalle min.–max.)")
 
     _apply_time_axis_with_right_margin(
         ax=ax,
@@ -1086,7 +1194,7 @@ def plot_score_distribution_over_time(
         use_log1p=use_log1p,
     )
 
-    ax.set_title("Score range over time (per solver) — mean ± [min,max]")
+    ax.set_title("Étendue des scores au fil du temps (par solveur) — moyenne et intervalle [min., max.]")
     _legend_bottom()
     _savefig(out_png)
 
@@ -1096,7 +1204,7 @@ def save_score_distribution_csv(dist_df: pd.DataFrame, out_csv: Path) -> None:
     dist_df.to_csv(out_csv, index=False)
 
 
-# ============ 7) Driver ============
+# ============ 8) Driver ============
 
 def generate_final_score_summary(
     df_traj: pd.DataFrame,
@@ -1108,7 +1216,7 @@ def generate_final_score_summary(
     min_n_instances: Optional[int] = None,
 ) -> Dict[str, str]:
     """
-    Pipeline : segments → stats → CSV + PNG + métriques AUC/SDT.
+    Pipeline : segments → scores/coûts moyens → CSV + PNG + métriques AUC/SDT.
 
     Important :
       - un horizon global commun [t_min, t_max] est résolu ici ;
@@ -1126,7 +1234,7 @@ def generate_final_score_summary(
         t_min=common_t_min,
         t_max=common_t_max,
     )
-    print(f"...instance segments collected on common horizon [{common_t_min}, {common_t_max}]...")
+    print(f"...segments des instances collectés sur l’horizon commun [{common_t_min}, {common_t_max}]...")
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1135,7 +1243,7 @@ def generate_final_score_summary(
         by=by,
         min_n_instances=min_n_instances,
     )
-    print("...compute score distribution over time...")
+    print("...calcul de la distribution des scores au fil du temps...")
 
     ts = (
         dist[["t", by, "mean", "n_instances"]]
@@ -1152,6 +1260,17 @@ def generate_final_score_summary(
     plot_avg_scores_over_time_zoomed_robust(
     ts_df=ts,out_png=out_dir / "average_scores_over_time_zoomed_robust.png",by=by,log_time=log_time)
 
+    cost_ts = compute_avg_cost_over_time(
+        seg,
+        by=by,
+        min_n_instances=min_n_instances,
+    )
+    cost_csv = out_dir / "average_cost_over_time.csv"
+    cost_png = out_dir / "average_cost_over_time.png"
+    save_avg_cost_csv(cost_ts, cost_csv)
+    plot_avg_cost_over_time(cost_ts, cost_png, by=by, log_time=log_time)
+    print("...calcul du coût moyen au fil du temps...")
+
     auc_df = compute_auc_scores(ts, by=by)
     auc_csv = out_dir / "auc_scores_over_time.csv"
     auc_png = out_dir / "auc_scores_over_time.png"
@@ -1166,6 +1285,8 @@ def generate_final_score_summary(
     return {
         "avg_scores_csv": str(out_csv),
         "avg_scores_png": str(out_png),
+        "avg_cost_csv": str(cost_csv),
+        "avg_cost_png": str(cost_png),
         "auc_scores_csv": str(auc_csv),
         "auc_scores_png": str(auc_png),
         "score_dist_csv": str(dist_csv),
